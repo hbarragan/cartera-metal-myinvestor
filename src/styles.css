@@ -121,6 +121,10 @@ h2 {
   color: white;
 }
 
+.hidden-file {
+  display: none;
+}
+
 .danger-button {
   display: inline-flex;
   align-items: center;

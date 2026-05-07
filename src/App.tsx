@@ -5,15 +5,17 @@ import {
   BriefcaseBusiness,
   Check,
   CircleDollarSign,
+  Download,
   LayoutDashboard,
   LineChart,
   Plus,
   RefreshCcw,
   Save,
   Trash2,
+  Upload,
   WalletCards,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type PortfolioKind = "indices" | "crypto" | "stocks";
 
@@ -183,6 +185,35 @@ function createPortfolio(kind: PortfolioKind, name?: string): Portfolio {
   };
 }
 
+function normalizeImportedPortfolio(value: unknown): Portfolio | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<Portfolio>;
+  if (!candidate.id || !candidate.name || !candidate.kind || !["indices", "crypto", "stocks"].includes(candidate.kind)) {
+    return null;
+  }
+
+  return {
+    id: String(candidate.id),
+    kind: candidate.kind,
+    name: String(candidate.name),
+    investedEUR: safeNumber(candidate.investedEUR ?? 0),
+    positions: Array.isArray(candidate.positions)
+      ? candidate.positions
+          .map((position) => {
+            if (!position || typeof position !== "object") return null;
+            const item = position as Partial<Position>;
+            if (!item.id || !item.symbol) return null;
+            return {
+              id: String(item.id),
+              symbol: String(item.symbol).trim().toUpperCase(),
+              quantity: safeNumber(item.quantity ?? 0),
+            };
+          })
+          .filter(Boolean) as Position[]
+      : [],
+  };
+}
+
 function metalPortfolioFromLegacy(): Portfolio | null {
   for (const key of LEGACY_KEYS) {
     const cached = localStorage.getItem(key);
@@ -236,6 +267,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const cached = localStorage.getItem(APP_CACHE_KEY);
@@ -319,6 +351,44 @@ export default function App() {
     window.setTimeout(() => setIsSaving(false), 650);
   }
 
+  function exportPortfolios() {
+    const savedAt = new Date().toISOString();
+    const payload: AppCache = { portfolios, savedAt };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `hbarragan-stock-carteras-${savedAt.slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importPortfolios(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const parsed = JSON.parse(await file.text()) as Partial<AppCache> | Portfolio[];
+      const rawPortfolios = Array.isArray(parsed) ? parsed : parsed.portfolios;
+      const imported = (rawPortfolios ?? [])
+        .map((portfolio) => normalizeImportedPortfolio(portfolio))
+        .filter(Boolean) as Portfolio[];
+
+      if (!imported.length) throw new Error("El archivo no contiene carteras validas");
+
+      setPortfolios(imported);
+      setActiveView("dashboard");
+      persist(imported);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo importar el archivo");
+    } finally {
+      event.target.value = "";
+    }
+  }
+
   function updatePortfolio(portfolioId: string, updater: (portfolio: Portfolio) => Portfolio) {
     setPortfolios((current) => current.map((portfolio) => (portfolio.id === portfolioId ? updater(portfolio) : portfolio)));
   }
@@ -362,13 +432,28 @@ export default function App() {
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">stock.hbarrag</p>
+          <p className="eyebrow">hbarragan stock</p>
           <h1>Dashboard de carteras</h1>
         </div>
         <div className="actions">
           <button className="icon-button" onClick={refreshQuotes} title="Refrescar precios">
             <RefreshCcw size={18} className={isLoading ? "spin" : ""} />
           </button>
+          <button className="secondary-button" onClick={exportPortfolios}>
+            <Download size={17} />
+            Exportar
+          </button>
+          <button className="secondary-button" onClick={() => importInputRef.current?.click()}>
+            <Upload size={17} />
+            Importar
+          </button>
+          <input
+            ref={importInputRef}
+            className="hidden-file"
+            type="file"
+            accept="application/json,.json"
+            onChange={importPortfolios}
+          />
           <button className="primary-button" onClick={save}>
             {isSaving ? <Check size={17} /> : <Save size={17} />}
             Guardar
