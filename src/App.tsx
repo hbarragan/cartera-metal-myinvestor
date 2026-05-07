@@ -30,10 +30,24 @@ type Quote = {
 
 type Holding = {
   isin: string;
-  amountEUR: number;
-  lastNav: number | null;
-  lastNavDate: string | null;
+  shares: number;
+  seedAmountEUR?: number;
+  lastVal: number | null;
+  lastValDate: string | null;
+  previousVal: number | null;
   updatedAt: string | null;
+};
+
+type LegacyHolding = {
+  isin: string;
+  amountEUR?: number;
+  shares?: number;
+  lastNav?: number | null;
+  lastNavDate?: string | null;
+  lastVal?: number | null;
+  lastValDate?: string | null;
+  previousVal?: number | null;
+  updatedAt?: string | null;
 };
 
 type Snapshot = {
@@ -47,7 +61,8 @@ type CacheState = {
   savedAt: string;
 };
 
-const CACHE_KEY = "cartera-metal-myinvestor:v1";
+const CACHE_KEY = "cartera-metal-myinvestor:v2";
+const LEGACY_CACHE_KEY = "cartera-metal-myinvestor:v1";
 const DEFAULT_ISINS = [
   "IE000N4ZYX28",
   "IE000N51F726",
@@ -65,20 +80,38 @@ const euro = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 2,
 });
 
+const valFormat = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  maximumFractionDigits: 6,
+});
+
 const percent = new Intl.NumberFormat("es-ES", {
   style: "percent",
   maximumFractionDigits: 2,
 });
 
 function defaultHoldings(): Holding[] {
-  const perFund = DEFAULT_TOTAL / DEFAULT_ISINS.length;
   return DEFAULT_ISINS.map((isin) => ({
     isin,
-    amountEUR: perFund,
-    lastNav: null,
-    lastNavDate: null,
+    shares: 0,
+    lastVal: null,
+    lastValDate: null,
+    previousVal: null,
     updatedAt: null,
   }));
+}
+
+function normalizeHolding(holding: LegacyHolding): Holding {
+  return {
+    isin: holding.isin,
+    shares: holding.shares ?? 0,
+    seedAmountEUR: holding.amountEUR,
+    lastVal: holding.lastVal ?? holding.lastNav ?? null,
+    lastValDate: holding.lastValDate ?? holding.lastNavDate ?? null,
+    previousVal: holding.previousVal ?? null,
+    updatedAt: holding.updatedAt ?? null,
+  };
 }
 
 function safeNumber(value: string) {
@@ -99,12 +132,25 @@ function formatDateTime(value?: string | null) {
   }).format(new Date(value));
 }
 
-function quoteDelta(current: Holding, quote?: Quote) {
-  if (!quote?.nav || !current.lastNav) return { amount: 0, ratio: 0 };
-  const nextAmount = current.amountEUR * (quote.nav / current.lastNav);
+function formatShares(value: number) {
+  return Number.isFinite(value) ? value.toFixed(6).replace(/\.?0+$/, "") : "0";
+}
+
+function valFor(holding: Holding, quote?: Quote) {
+  return quote?.nav ?? holding.lastVal ?? 0;
+}
+
+function holdingValue(holding: Holding, quote?: Quote) {
+  return holding.shares * valFor(holding, quote);
+}
+
+function holdingDelta(holding: Holding, quote?: Quote) {
+  const currentVal = valFor(holding, quote);
+  if (!holding.previousVal || !currentVal) return { amount: 0, ratio: 0 };
+  const amount = holding.shares * (currentVal - holding.previousVal);
   return {
-    amount: nextAmount - current.amountEUR,
-    ratio: nextAmount / current.amountEUR - 1,
+    amount,
+    ratio: currentVal / holding.previousVal - 1,
   };
 }
 
@@ -120,34 +166,40 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const cached = localStorage.getItem(CACHE_KEY);
+    const cached = localStorage.getItem(CACHE_KEY) ?? localStorage.getItem(LEGACY_CACHE_KEY);
     if (!cached) {
       const initial = defaultHoldings();
       setHoldings(initial);
-      setDrafts(
-        Object.fromEntries(initial.map((holding) => [holding.isin, holding.amountEUR.toFixed(2)])),
-      );
+      setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
       return;
     }
 
     try {
-      const parsed = JSON.parse(cached) as CacheState;
-      const cachedByIsin = new Map(parsed.holdings.map((holding) => [holding.isin, holding]));
+      const parsed = JSON.parse(cached) as { holdings?: LegacyHolding[]; history?: Snapshot[]; savedAt?: string };
+      const cachedByIsin = new Map(
+        (parsed.holdings ?? []).map((holding) => [holding.isin, normalizeHolding(holding)]),
+      );
       const merged = defaultHoldings().map((holding) => cachedByIsin.get(holding.isin) ?? holding);
       setHoldings(merged);
-      setDrafts(
-        Object.fromEntries(merged.map((holding) => [holding.isin, holding.amountEUR.toFixed(2)])),
-      );
+      setDrafts(Object.fromEntries(merged.map((holding) => [holding.isin, formatShares(holding.shares)])));
       setHistory(parsed.history ?? []);
-      setLastSavedAt(parsed.savedAt);
+      setLastSavedAt(parsed.savedAt ?? null);
     } catch {
       const initial = defaultHoldings();
       setHoldings(initial);
-      setDrafts(
-        Object.fromEntries(initial.map((holding) => [holding.isin, holding.amountEUR.toFixed(2)])),
-      );
+      setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
     }
   }, []);
+
+  const quoteByIsin = useMemo(
+    () => new Map(quotes.map((quote) => [quote.isin, quote])),
+    [quotes],
+  );
+
+  const total = useMemo(
+    () => holdings.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0),
+    [holdings, quoteByIsin],
+  );
 
   const persist = useCallback((nextHoldings: Holding[], nextHistory: Snapshot[]) => {
     const savedAt = nowIso();
@@ -162,76 +214,63 @@ export default function App() {
     setLastSavedAt(savedAt);
   }, []);
 
-  const total = useMemo(
-    () => holdings.reduce((sum, holding) => sum + holding.amountEUR, 0),
-    [holdings],
-  );
+  const refreshQuotes = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/quotes?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as { refreshedAt: string; quotes: Quote[] };
+      setQuotes(payload.quotes);
+      setLastApiRefresh(payload.refreshedAt);
 
-  const quoteByIsin = useMemo(
-    () => new Map(quotes.map((quote) => [quote.isin, quote])),
-    [quotes],
-  );
+      setHoldings((current) => {
+        const byIsin = new Map(payload.quotes.map((quote) => [quote.isin, quote]));
+        const hasNoShares = current.every((holding) => holding.shares <= 0);
+        let changed = false;
+        const next = current.map((holding) => {
+          const quote = byIsin.get(holding.isin);
+          if (!quote?.nav) return holding;
 
-  const refreshQuotes = useCallback(
-    async (applyPerformance = true) => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const response = await fetch(`/api/quotes?t=${Date.now()}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = (await response.json()) as { refreshedAt: string; quotes: Quote[] };
-        setQuotes(payload.quotes);
-        setLastApiRefresh(payload.refreshedAt);
+          const shares = hasNoShares
+            ? (holding.seedAmountEUR ?? DEFAULT_TOTAL / DEFAULT_ISINS.length) / quote.nav
+            : holding.shares;
+          const previousVal = holding.lastVal ?? quote.nav;
 
-        if (applyPerformance) {
-          setHoldings((current) => {
-            const byIsin = new Map(payload.quotes.map((quote) => [quote.isin, quote]));
-            let changed = false;
-            const next = current.map((holding) => {
-              const quote = byIsin.get(holding.isin);
-              if (!quote?.nav) return holding;
+          if (
+            shares !== holding.shares ||
+            quote.nav !== holding.lastVal ||
+            quote.navDate !== holding.lastValDate
+          ) {
+            changed = true;
+          }
 
-              const amountEUR = holding.lastNav
-                ? holding.amountEUR * (quote.nav / holding.lastNav)
-                : holding.amountEUR;
+          return {
+            ...holding,
+            shares,
+            seedAmountEUR: undefined,
+            previousVal,
+            lastVal: quote.nav,
+            lastValDate: quote.navDate,
+            updatedAt: payload.refreshedAt,
+          };
+        });
 
-              if (
-                amountEUR !== holding.amountEUR ||
-                quote.nav !== holding.lastNav ||
-                quote.navDate !== holding.lastNavDate
-              ) {
-                changed = true;
-              }
+        if (!changed) return current;
 
-              return {
-                ...holding,
-                amountEUR,
-                lastNav: quote.nav,
-                lastNavDate: quote.navDate,
-                updatedAt: payload.refreshedAt,
-              };
-            });
-
-            if (!changed) return current;
-
-            const nextTotal = next.reduce((sum, holding) => sum + holding.amountEUR, 0);
-            const nextHistory = [...history, { at: payload.refreshedAt, total: nextTotal }].slice(-48);
-            setHistory(nextHistory);
-            setDrafts(
-              Object.fromEntries(next.map((holding) => [holding.isin, holding.amountEUR.toFixed(2)])),
-            );
-            persist(next, nextHistory);
-            return next;
-          });
-        }
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "No se pudo refrescar");
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [history, persist],
-  );
+        const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, byIsin.get(holding.isin)), 0);
+        const nextHistory = [...history, { at: payload.refreshedAt, total: nextTotal }].slice(-48);
+        setHistory(nextHistory);
+        setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
+        persist(next, nextHistory);
+        return next;
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo refrescar");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [history, persist]);
 
   useEffect(() => {
     refreshQuotes();
@@ -239,20 +278,15 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refreshQuotes]);
 
-  const projected = useMemo(() => {
+  const rows = useMemo(() => {
     return holdings.map((holding) => {
       const quote = quoteByIsin.get(holding.isin);
-      const delta = quoteDelta(holding, quote);
-      return {
-        holding,
-        quote,
-        delta,
-        nextAmount: holding.amountEUR + delta.amount,
-      };
+      const value = holdingValue(holding, quote);
+      const delta = holdingDelta(holding, quote);
+      return { holding, quote, value, delta };
     });
   }, [holdings, quoteByIsin]);
 
-  const projectedTotal = projected.reduce((sum, item) => sum + item.nextAmount, 0);
   const absoluteReturn = total - DEFAULT_TOTAL;
   const returnRatio = total / DEFAULT_TOTAL - 1;
   const okQuotes = quotes.filter((quote) => quote.status === "ok").length;
@@ -264,13 +298,14 @@ export default function App() {
       const quote = quoteByIsin.get(holding.isin);
       return {
         ...holding,
-        amountEUR: safeNumber(drafts[holding.isin] ?? String(holding.amountEUR)),
-        lastNav: quote?.nav ?? holding.lastNav,
-        lastNavDate: quote?.navDate ?? holding.lastNavDate,
+        shares: safeNumber(drafts[holding.isin] ?? String(holding.shares)),
+        previousVal: holding.lastVal,
+        lastVal: quote?.nav ?? holding.lastVal,
+        lastValDate: quote?.navDate ?? holding.lastValDate,
         updatedAt: savedAt,
       };
     });
-    const nextTotal = next.reduce((sum, holding) => sum + holding.amountEUR, 0);
+    const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
     const nextHistory = [...history, { at: savedAt, total: nextTotal }].slice(-48);
     setHoldings(next);
     setHistory(nextHistory);
@@ -279,20 +314,23 @@ export default function App() {
   }
 
   function resetPortfolio() {
-    const initial = defaultHoldings();
     const savedAt = nowIso();
-    const next = initial.map((holding) => {
+    const next = defaultHoldings().map((holding) => {
       const quote = quoteByIsin.get(holding.isin);
+      const shares = quote?.nav ? DEFAULT_TOTAL / DEFAULT_ISINS.length / quote.nav : 0;
       return {
         ...holding,
-        lastNav: quote?.nav ?? null,
-        lastNavDate: quote?.navDate ?? null,
+        shares,
+        previousVal: quote?.nav ?? null,
+        lastVal: quote?.nav ?? null,
+        lastValDate: quote?.navDate ?? null,
         updatedAt: savedAt,
       };
     });
-    const nextHistory = [{ at: savedAt, total: DEFAULT_TOTAL }];
+    const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
+    const nextHistory = [{ at: savedAt, total: nextTotal || DEFAULT_TOTAL }];
     setHoldings(next);
-    setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, holding.amountEUR.toFixed(2)])));
+    setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
     setHistory(nextHistory);
     persist(next, nextHistory);
   }
@@ -305,7 +343,7 @@ export default function App() {
           <h1>Cartera Metal</h1>
         </div>
         <div className="actions">
-          <button className="icon-button" onClick={() => refreshQuotes()} title="Refrescar NAV">
+          <button className="icon-button" onClick={() => refreshQuotes()} title="Refrescar VAL">
             <RefreshCcw size={18} className={isLoading ? "spin" : ""} />
           </button>
           <button className="secondary-button" onClick={resetPortfolio}>
@@ -348,9 +386,9 @@ export default function App() {
         </article>
         <article className="metric">
           <Banknote size={20} />
-          <span>Proxima valoracion</span>
-          <strong>{euro.format(projectedTotal)}</strong>
-          <small>Aplicando el ultimo NAV disponible</small>
+          <span>Formula</span>
+          <strong>Part. x VAL</strong>
+          <small>El aporte se calcula en euros</small>
         </article>
       </section>
 
@@ -365,10 +403,10 @@ export default function App() {
         <div className="portfolio-panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Distribucion en euros</p>
+              <p className="eyebrow">Distribucion por participaciones</p>
               <h2>Fondos de la cartera</h2>
             </div>
-            <p>{euro.format(total)} guardados en este navegador</p>
+            <p>{euro.format(total)} calculados en este navegador</p>
           </div>
 
           <div className="table-shell">
@@ -377,16 +415,17 @@ export default function App() {
                 <tr>
                   <th>Fondo</th>
                   <th>ISIN</th>
-                  <th>NAV</th>
-                  <th>Fecha NAV</th>
+                  <th>VAL</th>
+                  <th>Fecha VAL</th>
+                  <th>Participaciones</th>
                   <th>Aporte</th>
                   <th>Peso</th>
                   <th>Desde cache</th>
                 </tr>
               </thead>
               <tbody>
-                {projected.map(({ holding, quote, delta }) => {
-                  const weight = total > 0 ? holding.amountEUR / total : 0;
+                {rows.map(({ holding, quote, value, delta }) => {
+                  const weight = total > 0 ? value / total : 0;
                   return (
                     <tr key={holding.isin}>
                       <td>
@@ -394,11 +433,11 @@ export default function App() {
                         <span>{quote?.category ?? "Pendiente"}</span>
                       </td>
                       <td className="mono">{holding.isin}</td>
-                      <td>{quote?.nav ? euro.format(quote.nav) : "Sin dato"}</td>
-                      <td>{quote?.navDate ?? holding.lastNavDate ?? "Pendiente"}</td>
+                      <td>{valFor(holding, quote) ? valFormat.format(valFor(holding, quote)) : "Sin dato"}</td>
+                      <td>{quote?.navDate ?? holding.lastValDate ?? "Pendiente"}</td>
                       <td>
-                        <label className="money-input">
-                          <span>EUR</span>
+                        <label className="money-input unit-input">
+                          <span>PART.</span>
                           <input
                             value={drafts[holding.isin] ?? ""}
                             inputMode="decimal"
@@ -411,6 +450,7 @@ export default function App() {
                           />
                         </label>
                       </td>
+                      <td>{euro.format(value)}</td>
                       <td>{percent.format(weight)}</td>
                       <td className={delta.amount >= 0 ? "positive" : "negative"}>
                         {delta.amount >= 0 ? "+" : ""}
