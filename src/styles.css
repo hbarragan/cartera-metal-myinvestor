@@ -158,6 +158,19 @@ h2 {
   color: var(--muted);
 }
 
+.editable-metric .money-input {
+  margin-top: 7px;
+}
+
+.invested-input {
+  width: 100%;
+}
+
+.invested-input input {
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
 .primary-metric {
   background: var(--surface-strong);
   color: white;

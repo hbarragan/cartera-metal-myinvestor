@@ -58,10 +58,12 @@ type Snapshot = {
 type CacheState = {
   holdings: Holding[];
   history: Snapshot[];
+  investedEUR: number;
   savedAt: string;
 };
 
-const CACHE_KEY = "cartera-metal-myinvestor:v2";
+const CACHE_KEY = "cartera-metal-myinvestor:v3";
+const PREVIOUS_CACHE_KEY = "cartera-metal-myinvestor:v2";
 const LEGACY_CACHE_KEY = "cartera-metal-myinvestor:v1";
 const DEFAULT_ISINS = [
   "IE000N4ZYX28",
@@ -158,6 +160,8 @@ export default function App() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>(defaultHoldings);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [investedEUR, setInvestedEUR] = useState(DEFAULT_TOTAL);
+  const [investedDraft, setInvestedDraft] = useState(DEFAULT_TOTAL.toFixed(2));
   const [history, setHistory] = useState<Snapshot[]>([]);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [lastApiRefresh, setLastApiRefresh] = useState<string | null>(null);
@@ -166,28 +170,43 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const cached = localStorage.getItem(CACHE_KEY) ?? localStorage.getItem(LEGACY_CACHE_KEY);
+    const cached =
+      localStorage.getItem(CACHE_KEY) ??
+      localStorage.getItem(PREVIOUS_CACHE_KEY) ??
+      localStorage.getItem(LEGACY_CACHE_KEY);
     if (!cached) {
       const initial = defaultHoldings();
       setHoldings(initial);
       setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
+      setInvestedEUR(DEFAULT_TOTAL);
+      setInvestedDraft(DEFAULT_TOTAL.toFixed(2));
       return;
     }
 
     try {
-      const parsed = JSON.parse(cached) as { holdings?: LegacyHolding[]; history?: Snapshot[]; savedAt?: string };
+      const parsed = JSON.parse(cached) as {
+        holdings?: LegacyHolding[];
+        history?: Snapshot[];
+        investedEUR?: number;
+        savedAt?: string;
+      };
       const cachedByIsin = new Map(
         (parsed.holdings ?? []).map((holding) => [holding.isin, normalizeHolding(holding)]),
       );
       const merged = defaultHoldings().map((holding) => cachedByIsin.get(holding.isin) ?? holding);
+      const invested = parsed.investedEUR ?? DEFAULT_TOTAL;
       setHoldings(merged);
       setDrafts(Object.fromEntries(merged.map((holding) => [holding.isin, formatShares(holding.shares)])));
+      setInvestedEUR(invested);
+      setInvestedDraft(invested.toFixed(2));
       setHistory(parsed.history ?? []);
       setLastSavedAt(parsed.savedAt ?? null);
     } catch {
       const initial = defaultHoldings();
       setHoldings(initial);
       setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
+      setInvestedEUR(DEFAULT_TOTAL);
+      setInvestedDraft(DEFAULT_TOTAL.toFixed(2));
     }
   }, []);
 
@@ -201,13 +220,14 @@ export default function App() {
     [holdings, quoteByIsin],
   );
 
-  const persist = useCallback((nextHoldings: Holding[], nextHistory: Snapshot[]) => {
+  const persist = useCallback((nextHoldings: Holding[], nextHistory: Snapshot[], nextInvestedEUR: number) => {
     const savedAt = nowIso();
     localStorage.setItem(
       CACHE_KEY,
       JSON.stringify({
         holdings: nextHoldings,
         history: nextHistory.slice(-48),
+        investedEUR: nextInvestedEUR,
         savedAt,
       } satisfies CacheState),
     );
@@ -233,7 +253,7 @@ export default function App() {
           if (!quote?.nav) return holding;
 
           const shares = hasNoShares
-            ? (holding.seedAmountEUR ?? DEFAULT_TOTAL / DEFAULT_ISINS.length) / quote.nav
+            ? (holding.seedAmountEUR ?? investedEUR / DEFAULT_ISINS.length) / quote.nav
             : holding.shares;
           const previousVal = holding.lastVal ?? quote.nav;
 
@@ -262,7 +282,7 @@ export default function App() {
         const nextHistory = [...history, { at: payload.refreshedAt, total: nextTotal }].slice(-48);
         setHistory(nextHistory);
         setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
-        persist(next, nextHistory);
+        persist(next, nextHistory, investedEUR);
         return next;
       });
     } catch (caught) {
@@ -270,7 +290,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [history, persist]);
+  }, [history, investedEUR, persist]);
 
   useEffect(() => {
     refreshQuotes();
@@ -287,13 +307,15 @@ export default function App() {
     });
   }, [holdings, quoteByIsin]);
 
-  const absoluteReturn = total - DEFAULT_TOTAL;
-  const returnRatio = total / DEFAULT_TOTAL - 1;
+  const activeInvestedEUR = safeNumber(investedDraft);
+  const absoluteReturn = total - activeInvestedEUR;
+  const returnRatio = activeInvestedEUR > 0 ? total / activeInvestedEUR - 1 : 0;
   const okQuotes = quotes.filter((quote) => quote.status === "ok").length;
 
   function saveDrafts() {
     setIsSaving(true);
     const savedAt = nowIso();
+    const nextInvestedEUR = safeNumber(investedDraft);
     const next = holdings.map((holding) => {
       const quote = quoteByIsin.get(holding.isin);
       return {
@@ -308,16 +330,19 @@ export default function App() {
     const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
     const nextHistory = [...history, { at: savedAt, total: nextTotal }].slice(-48);
     setHoldings(next);
+    setInvestedEUR(nextInvestedEUR);
+    setInvestedDraft(nextInvestedEUR.toFixed(2));
     setHistory(nextHistory);
-    persist(next, nextHistory);
+    persist(next, nextHistory, nextInvestedEUR);
     window.setTimeout(() => setIsSaving(false), 650);
   }
 
   function resetPortfolio() {
     const savedAt = nowIso();
+    const nextInvestedEUR = safeNumber(investedDraft) || DEFAULT_TOTAL;
     const next = defaultHoldings().map((holding) => {
       const quote = quoteByIsin.get(holding.isin);
-      const shares = quote?.nav ? DEFAULT_TOTAL / DEFAULT_ISINS.length / quote.nav : 0;
+      const shares = quote?.nav ? nextInvestedEUR / DEFAULT_ISINS.length / quote.nav : 0;
       return {
         ...holding,
         shares,
@@ -328,11 +353,13 @@ export default function App() {
       };
     });
     const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
-    const nextHistory = [{ at: savedAt, total: nextTotal || DEFAULT_TOTAL }];
+    const nextHistory = [{ at: savedAt, total: nextTotal || nextInvestedEUR }];
     setHoldings(next);
+    setInvestedEUR(nextInvestedEUR);
+    setInvestedDraft(nextInvestedEUR.toFixed(2));
     setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
     setHistory(nextHistory);
-    persist(next, nextHistory);
+    persist(next, nextHistory, nextInvestedEUR);
   }
 
   return (
@@ -364,17 +391,33 @@ export default function App() {
           <strong>{euro.format(total)}</strong>
           <small className={absoluteReturn >= 0 ? "positive" : "negative"}>
             {absoluteReturn >= 0 ? "+" : ""}
-            {euro.format(absoluteReturn)} desde {euro.format(DEFAULT_TOTAL)}
+            {euro.format(absoluteReturn)} vs invertido
           </small>
+        </article>
+        <article className="metric editable-metric">
+          <Banknote size={20} />
+          <span>Invertido</span>
+          <label className="money-input invested-input">
+            <span>EUR</span>
+            <input
+              value={investedDraft}
+              inputMode="decimal"
+              onChange={(event) => setInvestedDraft(event.target.value)}
+            />
+          </label>
+          <small>Guardado: {euro.format(investedEUR)}</small>
         </article>
         <article className="metric">
           {returnRatio >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-          <span>Rentabilidad cacheada</span>
+          <span>Ganancia</span>
           <strong className={returnRatio >= 0 ? "positive" : "negative"}>
             {returnRatio >= 0 ? "+" : ""}
             {percent.format(returnRatio)}
           </strong>
-          <small>Ultima cartera: {formatDateTime(lastSavedAt)}</small>
+          <small className={absoluteReturn >= 0 ? "positive" : "negative"}>
+            {absoluteReturn >= 0 ? "+" : ""}
+            {euro.format(absoluteReturn)}
+          </small>
         </article>
         <article className="metric">
           <Activity size={20} />
@@ -383,12 +426,6 @@ export default function App() {
             {okQuotes}/{DEFAULT_ISINS.length}
           </strong>
           <small>{formatDateTime(lastApiRefresh)}</small>
-        </article>
-        <article className="metric">
-          <Banknote size={20} />
-          <span>Formula</span>
-          <strong>Part. x VAL</strong>
-          <small>El aporte se calcula en euros</small>
         </article>
       </section>
 
