@@ -62,7 +62,8 @@ type CacheState = {
   savedAt: string;
 };
 
-const CACHE_KEY = "cartera-metal-myinvestor:v3";
+const CACHE_KEY = "cartera-metal-myinvestor:v4";
+const CORRUPTED_CACHE_KEY = "cartera-metal-myinvestor:v3";
 const PREVIOUS_CACHE_KEY = "cartera-metal-myinvestor:v2";
 const LEGACY_CACHE_KEY = "cartera-metal-myinvestor:v1";
 const DEFAULT_ISINS = [
@@ -117,7 +118,21 @@ function normalizeHolding(holding: LegacyHolding): Holding {
 }
 
 function safeNumber(value: string) {
-  const normalized = value.replace(/\./g, "").replace(",", ".");
+  const clean = value
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/[€%]/g, "");
+
+  let normalized = clean;
+  if (clean.includes(",") && clean.includes(".")) {
+    normalized = clean.replace(/\./g, "").replace(",", ".");
+  } else if (clean.includes(",")) {
+    normalized = clean.replace(",", ".");
+  } else if ((clean.match(/\./g) ?? []).length > 1) {
+    const parts = clean.split(".");
+    normalized = `${parts.slice(0, -1).join("")}.${parts.at(-1)}`;
+  }
+
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -156,6 +171,34 @@ function holdingDelta(holding: Holding, quote?: Quote) {
   };
 }
 
+function repairInflatedNumber(value: number, target = DEFAULT_TOTAL) {
+  if (!Number.isFinite(value) || value <= 0) return value;
+  let repaired = value;
+  const upperBound = Math.max(target * 100, 100_000);
+  while (repaired > upperBound) repaired /= 100;
+  return repaired;
+}
+
+function repairImportedState(holdings: Holding[], investedEUR: number, quotes: Map<string, Quote>) {
+  const valueOf = (holding: Holding) => holdingValue(holding, quotes.get(holding.isin));
+  const total = holdings.reduce((sum, holding) => sum + valueOf(holding), 0);
+  const target = investedEUR > 0 ? investedEUR : DEFAULT_TOTAL;
+
+  if (total <= Math.max(target * 100, 100_000)) return holdings;
+
+  let factor = 1;
+  let repairedTotal = total;
+  while (repairedTotal > Math.max(target * 20, 100_000)) {
+    factor *= 100;
+    repairedTotal = total / factor;
+  }
+
+  return holdings.map((holding) => ({
+    ...holding,
+    shares: holding.shares / factor,
+  }));
+}
+
 export default function App() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>(defaultHoldings);
@@ -172,6 +215,7 @@ export default function App() {
   useEffect(() => {
     const cached =
       localStorage.getItem(CACHE_KEY) ??
+      localStorage.getItem(CORRUPTED_CACHE_KEY) ??
       localStorage.getItem(PREVIOUS_CACHE_KEY) ??
       localStorage.getItem(LEGACY_CACHE_KEY);
     if (!cached) {
@@ -194,13 +238,29 @@ export default function App() {
         (parsed.holdings ?? []).map((holding) => [holding.isin, normalizeHolding(holding)]),
       );
       const merged = defaultHoldings().map((holding) => cachedByIsin.get(holding.isin) ?? holding);
-      const invested = parsed.investedEUR ?? DEFAULT_TOTAL;
-      setHoldings(merged);
-      setDrafts(Object.fromEntries(merged.map((holding) => [holding.isin, formatShares(holding.shares)])));
+      const invested = repairInflatedNumber(parsed.investedEUR ?? DEFAULT_TOTAL);
+      const repaired = repairImportedState(merged, invested, new Map());
+      const repairedHistory = (parsed.history ?? [])
+        .map((item) => ({ ...item, total: repairInflatedNumber(item.total, invested) }))
+        .filter((item) => Number.isFinite(item.total) && item.total > 0);
+      const savedAt = parsed.savedAt ?? nowIso();
+
+      localStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({
+          holdings: repaired,
+          history: repairedHistory.slice(-48),
+          investedEUR: invested,
+          savedAt,
+        } satisfies CacheState),
+      );
+
+      setHoldings(repaired);
+      setDrafts(Object.fromEntries(repaired.map((holding) => [holding.isin, formatShares(holding.shares)])));
       setInvestedEUR(invested);
       setInvestedDraft(invested.toFixed(2));
-      setHistory(parsed.history ?? []);
-      setLastSavedAt(parsed.savedAt ?? null);
+      setHistory(repairedHistory);
+      setLastSavedAt(savedAt);
     } catch {
       const initial = defaultHoldings();
       setHoldings(initial);
@@ -332,6 +392,7 @@ export default function App() {
     setHoldings(next);
     setInvestedEUR(nextInvestedEUR);
     setInvestedDraft(nextInvestedEUR.toFixed(2));
+    setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
     setHistory(nextHistory);
     persist(next, nextHistory, nextInvestedEUR);
     window.setTimeout(() => setIsSaving(false), 650);
