@@ -1,26 +1,47 @@
 import {
   Activity,
-  AlertCircle,
-  Banknote,
+  BarChart3,
+  Bitcoin,
+  BriefcaseBusiness,
   Check,
+  CircleDollarSign,
+  LayoutDashboard,
+  LineChart,
+  Plus,
   RefreshCcw,
-  RotateCcw,
   Save,
-  TrendingDown,
-  TrendingUp,
+  Trash2,
   WalletCards,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Quote = {
-  isin: string;
+type PortfolioKind = "indices" | "crypto" | "stocks";
+
+type Position = {
+  id: string;
+  symbol: string;
+  quantity: number;
+};
+
+type Portfolio = {
+  id: string;
+  kind: PortfolioKind;
+  name: string;
+  investedEUR: number;
+  positions: Position[];
+};
+
+type MarketQuote = {
+  id: string;
+  kind: PortfolioKind;
+  symbol: string;
   name: string;
   shortName: string;
-  category: string;
-  currency: "EUR";
-  nav: number | null;
-  navDate: string | null;
-  changeAmount: number | null;
+  category?: string;
+  currency: string;
+  price: number | null;
+  priceEUR: number | null;
+  priceDate: string | null;
   changePercent: number | null;
   source: string;
   sourceUrl: string;
@@ -28,54 +49,61 @@ type Quote = {
   error?: string;
 };
 
-type Holding = {
-  isin: string;
-  shares: number;
-  seedAmountEUR?: number;
-  lastVal: number | null;
-  lastValDate: string | null;
-  previousVal: number | null;
-  updatedAt: string | null;
+type AppCache = {
+  portfolios: Portfolio[];
+  savedAt: string;
 };
 
 type LegacyHolding = {
   isin: string;
-  amountEUR?: number;
   shares?: number;
-  lastNav?: number | null;
-  lastNavDate?: string | null;
   lastVal?: number | null;
-  lastValDate?: string | null;
-  previousVal?: number | null;
-  updatedAt?: string | null;
+  lastNav?: number | null;
 };
 
-type Snapshot = {
-  at: string;
-  total: number;
-};
-
-type CacheState = {
-  holdings: Holding[];
-  history: Snapshot[];
-  investedEUR: number;
-  savedAt: string;
-};
-
-const CACHE_KEY = "cartera-metal-myinvestor:v4";
-const CORRUPTED_CACHE_KEY = "cartera-metal-myinvestor:v3";
-const PREVIOUS_CACHE_KEY = "cartera-metal-myinvestor:v2";
-const LEGACY_CACHE_KEY = "cartera-metal-myinvestor:v1";
-const DEFAULT_ISINS = [
-  "IE000N4ZYX28",
-  "IE000N51F726",
-  "IE000QAZP7L2",
-  "IE00BYX5N771",
-  "IE00B1G3DH73",
-  "IE00BYX5MD61",
-  "IE00BDZVHT63",
+const APP_CACHE_KEY = "stock-hbarrag:v1";
+const LEGACY_KEYS = [
+  "cartera-metal-myinvestor:v4",
+  "cartera-metal-myinvestor:v3",
+  "cartera-metal-myinvestor:v2",
+  "cartera-metal-myinvestor:v1",
 ];
-const DEFAULT_TOTAL = 10000;
+
+const INDEX_OPTIONS = [
+  { symbol: "IE000N4ZYX28", label: "iShares US" },
+  { symbol: "IE000N51F726", label: "iShares World ESG" },
+  { symbol: "IE000QAZP7L2", label: "iShares Emerging" },
+  { symbol: "IE00BYX5N771", label: "Fidelity Japan" },
+  { symbol: "IE00B1G3DH73", label: "Vanguard US Hedged" },
+  { symbol: "IE00BYX5MD61", label: "Fidelity Europe" },
+  { symbol: "IE00BDZVHT63", label: "Fidelity Pacific ex-Japan" },
+];
+
+const CRYPTO_OPTIONS = [
+  { symbol: "BTC-EUR", label: "Bitcoin" },
+  { symbol: "ETH-EUR", label: "Ethereum" },
+  { symbol: "SOL-EUR", label: "Solana" },
+  { symbol: "BNB-EUR", label: "BNB" },
+  { symbol: "XRP-EUR", label: "XRP" },
+  { symbol: "ADA-EUR", label: "Cardano" },
+];
+
+const STOCK_OPTIONS = [
+  { symbol: "AAPL", label: "Apple" },
+  { symbol: "MSFT", label: "Microsoft" },
+  { symbol: "NVDA", label: "NVIDIA" },
+  { symbol: "GOOGL", label: "Alphabet" },
+  { symbol: "AMZN", label: "Amazon" },
+  { symbol: "TSLA", label: "Tesla" },
+  { symbol: "IBE.MC", label: "Iberdrola" },
+  { symbol: "SAN.MC", label: "Santander" },
+];
+
+const KIND_META: Record<PortfolioKind, { label: string; single: string; icon: typeof BarChart3 }> = {
+  indices: { label: "Indices", single: "indice", icon: BarChart3 },
+  crypto: { label: "Crypto", single: "crypto", icon: Bitcoin },
+  stocks: { label: "Acciones", single: "accion", icon: BriefcaseBusiness },
+};
 
 const euro = new Intl.NumberFormat("es-ES", {
   style: "currency",
@@ -83,46 +111,24 @@ const euro = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 2,
 });
 
-const valFormat = new Intl.NumberFormat("es-ES", {
-  style: "currency",
-  currency: "EUR",
-  maximumFractionDigits: 6,
-});
-
 const percent = new Intl.NumberFormat("es-ES", {
   style: "percent",
   maximumFractionDigits: 2,
 });
 
-function defaultHoldings(): Holding[] {
-  return DEFAULT_ISINS.map((isin) => ({
-    isin,
-    shares: 0,
-    lastVal: null,
-    lastValDate: null,
-    previousVal: null,
-    updatedAt: null,
-  }));
+const priceFormat = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  maximumFractionDigits: 6,
+});
+
+function id() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function normalizeHolding(holding: LegacyHolding): Holding {
-  return {
-    isin: holding.isin,
-    shares: holding.shares ?? 0,
-    seedAmountEUR: holding.amountEUR,
-    lastVal: holding.lastVal ?? holding.lastNav ?? null,
-    lastValDate: holding.lastValDate ?? holding.lastNavDate ?? null,
-    previousVal: holding.previousVal ?? null,
-    updatedAt: holding.updatedAt ?? null,
-  };
-}
-
-function safeNumber(value: string) {
-  const clean = value
-    .trim()
-    .replace(/\s/g, "")
-    .replace(/[€%]/g, "");
-
+function safeNumber(value: string | number) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const clean = value.trim().replace(/\s/g, "").replace(/[€%]/g, "");
   let normalized = clean;
   if (clean.includes(",") && clean.includes(".")) {
     normalized = clean.replace(/\./g, "").replace(",", ".");
@@ -132,13 +138,12 @@ function safeNumber(value: string) {
     const parts = clean.split(".");
     normalized = `${parts.slice(0, -1).join("")}.${parts.at(-1)}`;
   }
-
   const parsed = Number.parseFloat(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function nowIso() {
-  return new Date().toISOString();
+function compactNumber(value: number) {
+  return Number.isFinite(value) ? value.toFixed(8).replace(/\.?0+$/, "") : "0";
 }
 
 function formatDateTime(value?: string | null) {
@@ -149,208 +154,140 @@ function formatDateTime(value?: string | null) {
   }).format(new Date(value));
 }
 
-function formatShares(value: number) {
-  return Number.isFinite(value) ? value.toFixed(6).replace(/\.?0+$/, "") : "0";
+function quoteKey(kind: PortfolioKind, symbol: string) {
+  return `${kind}:${symbol.toUpperCase()}`;
 }
 
-function valFor(holding: Holding, quote?: Quote) {
-  return quote?.nav ?? holding.lastVal ?? 0;
+function positionValue(position: Position, portfolio: Portfolio, quotes: Map<string, MarketQuote>) {
+  const quote = quotes.get(quoteKey(portfolio.kind, position.symbol));
+  return position.quantity * (quote?.priceEUR ?? 0);
 }
 
-function holdingValue(holding: Holding, quote?: Quote) {
-  return holding.shares * valFor(holding, quote);
+function portfolioValue(portfolio: Portfolio, quotes: Map<string, MarketQuote>) {
+  return portfolio.positions.reduce((sum, position) => sum + positionValue(position, portfolio, quotes), 0);
 }
 
-function holdingDelta(holding: Holding, quote?: Quote) {
-  const currentVal = valFor(holding, quote);
-  if (!holding.previousVal || !currentVal) return { amount: 0, ratio: 0 };
-  const amount = holding.shares * (currentVal - holding.previousVal);
+function gainFor(value: number, investedEUR: number) {
+  const amount = value - investedEUR;
+  const ratio = investedEUR > 0 ? value / investedEUR - 1 : 0;
+  return { amount, ratio };
+}
+
+function createPortfolio(kind: PortfolioKind, name?: string): Portfolio {
   return {
-    amount,
-    ratio: currentVal / holding.previousVal - 1,
+    id: id(),
+    kind,
+    name: name ?? `Cartera ${KIND_META[kind].label}`,
+    investedEUR: 0,
+    positions: [],
   };
 }
 
-function repairInflatedNumber(value: number, target = DEFAULT_TOTAL) {
-  if (!Number.isFinite(value) || value <= 0) return value;
-  let repaired = value;
-  const upperBound = Math.max(target * 100, 100_000);
-  while (repaired > upperBound) repaired /= 100;
-  return repaired;
+function metalPortfolioFromLegacy(): Portfolio | null {
+  for (const key of LEGACY_KEYS) {
+    const cached = localStorage.getItem(key);
+    if (!cached) continue;
+    try {
+      const parsed = JSON.parse(cached) as { holdings?: LegacyHolding[]; investedEUR?: number };
+      const positions = (parsed.holdings ?? [])
+        .map((holding) => ({
+          id: id(),
+          symbol: holding.isin,
+          quantity: safeNumber(holding.shares ?? 0),
+        }))
+        .filter((position) => position.symbol && position.quantity >= 0);
+
+      if (positions.length) {
+        return {
+          id: id(),
+          kind: "indices",
+          name: "Cartera Metal",
+          investedEUR: safeNumber(parsed.investedEUR ?? 10000),
+          positions,
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
-function repairImportedState(holdings: Holding[], investedEUR: number, quotes: Map<string, Quote>) {
-  const valueOf = (holding: Holding) => holdingValue(holding, quotes.get(holding.isin));
-  const total = holdings.reduce((sum, holding) => sum + valueOf(holding), 0);
-  const target = investedEUR > 0 ? investedEUR : DEFAULT_TOTAL;
-
-  if (total <= Math.max(target * 100, 100_000)) return holdings;
-
-  let factor = 1;
-  let repairedTotal = total;
-  while (repairedTotal > Math.max(target * 20, 100_000)) {
-    factor *= 100;
-    repairedTotal = total / factor;
-  }
-
-  return holdings.map((holding) => ({
-    ...holding,
-    shares: holding.shares / factor,
-  }));
+function metalTemplate(): Portfolio {
+  return {
+    id: id(),
+    kind: "indices",
+    name: "Cartera Metal",
+    investedEUR: 0,
+    positions: INDEX_OPTIONS.map((asset) => ({
+      id: id(),
+      symbol: asset.symbol,
+      quantity: 0,
+    })),
+  };
 }
 
 export default function App() {
-  const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [holdings, setHoldings] = useState<Holding[]>(defaultHoldings);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [investedEUR, setInvestedEUR] = useState(DEFAULT_TOTAL);
-  const [investedDraft, setInvestedDraft] = useState(DEFAULT_TOTAL.toFixed(2));
-  const [history, setHistory] = useState<Snapshot[]>([]);
+  const [portfolios, setPortfolios] = useState<Portfolio[]>([]);
+  const [quotes, setQuotes] = useState<MarketQuote[]>([]);
+  const [activeView, setActiveView] = useState<"dashboard" | PortfolioKind>("dashboard");
+  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-  const [lastApiRefresh, setLastApiRefresh] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const cached =
-      localStorage.getItem(CACHE_KEY) ??
-      localStorage.getItem(CORRUPTED_CACHE_KEY) ??
-      localStorage.getItem(PREVIOUS_CACHE_KEY) ??
-      localStorage.getItem(LEGACY_CACHE_KEY);
-    if (!cached) {
-      const initial = defaultHoldings();
-      setHoldings(initial);
-      setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
-      setInvestedEUR(DEFAULT_TOTAL);
-      setInvestedDraft(DEFAULT_TOTAL.toFixed(2));
-      return;
+    const cached = localStorage.getItem(APP_CACHE_KEY);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached) as AppCache;
+        setPortfolios(parsed.portfolios ?? []);
+        setLastSavedAt(parsed.savedAt ?? null);
+        return;
+      } catch {
+        localStorage.removeItem(APP_CACHE_KEY);
+      }
     }
 
-    try {
-      const parsed = JSON.parse(cached) as {
-        holdings?: LegacyHolding[];
-        history?: Snapshot[];
-        investedEUR?: number;
-        savedAt?: string;
-      };
-      const cachedByIsin = new Map(
-        (parsed.holdings ?? []).map((holding) => [holding.isin, normalizeHolding(holding)]),
-      );
-      const merged = defaultHoldings().map((holding) => cachedByIsin.get(holding.isin) ?? holding);
-      const invested = repairInflatedNumber(parsed.investedEUR ?? DEFAULT_TOTAL);
-      const repaired = repairImportedState(merged, invested, new Map());
-      const repairedHistory = (parsed.history ?? [])
-        .map((item) => ({ ...item, total: repairInflatedNumber(item.total, invested) }))
-        .filter((item) => Number.isFinite(item.total) && item.total > 0);
-      const savedAt = parsed.savedAt ?? nowIso();
-
-      localStorage.setItem(
-        CACHE_KEY,
-        JSON.stringify({
-          holdings: repaired,
-          history: repairedHistory.slice(-48),
-          investedEUR: invested,
-          savedAt,
-        } satisfies CacheState),
-      );
-
-      setHoldings(repaired);
-      setDrafts(Object.fromEntries(repaired.map((holding) => [holding.isin, formatShares(holding.shares)])));
-      setInvestedEUR(invested);
-      setInvestedDraft(invested.toFixed(2));
-      setHistory(repairedHistory);
-      setLastSavedAt(savedAt);
-    } catch {
-      const initial = defaultHoldings();
-      setHoldings(initial);
-      setDrafts(Object.fromEntries(initial.map((holding) => [holding.isin, "0"])));
-      setInvestedEUR(DEFAULT_TOTAL);
-      setInvestedDraft(DEFAULT_TOTAL.toFixed(2));
-    }
+    const migratedMetal = metalPortfolioFromLegacy();
+    setPortfolios(migratedMetal ? [migratedMetal] : []);
   }, []);
 
-  const quoteByIsin = useMemo(
-    () => new Map(quotes.map((quote) => [quote.isin, quote])),
+  const quoteMap = useMemo(
+    () => new Map(quotes.map((quote) => [quoteKey(quote.kind, quote.symbol), quote])),
     [quotes],
   );
 
-  const total = useMemo(
-    () => holdings.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0),
-    [holdings, quoteByIsin],
-  );
-
-  const persist = useCallback((nextHoldings: Holding[], nextHistory: Snapshot[], nextInvestedEUR: number) => {
-    const savedAt = nowIso();
-    localStorage.setItem(
-      CACHE_KEY,
-      JSON.stringify({
-        holdings: nextHoldings,
-        history: nextHistory.slice(-48),
-        investedEUR: nextInvestedEUR,
-        savedAt,
-      } satisfies CacheState),
+  const assetQuery = useMemo(() => {
+    const assets = portfolios.flatMap((portfolio) =>
+      portfolio.positions.map((position) => quoteKey(portfolio.kind, position.symbol)),
     );
-    setLastSavedAt(savedAt);
-  }, []);
+    return [...new Set(assets)].join(",");
+  }, [portfolios]);
 
   const refreshQuotes = useCallback(async () => {
+    if (!assetQuery) {
+      setQuotes([]);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/quotes?t=${Date.now()}`, { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = (await response.json()) as { refreshedAt: string; quotes: Quote[] };
-      setQuotes(payload.quotes);
-      setLastApiRefresh(payload.refreshedAt);
-
-      setHoldings((current) => {
-        const byIsin = new Map(payload.quotes.map((quote) => [quote.isin, quote]));
-        const hasNoShares = current.every((holding) => holding.shares <= 0);
-        let changed = false;
-        const next = current.map((holding) => {
-          const quote = byIsin.get(holding.isin);
-          if (!quote?.nav) return holding;
-
-          const shares = hasNoShares
-            ? (holding.seedAmountEUR ?? investedEUR / DEFAULT_ISINS.length) / quote.nav
-            : holding.shares;
-          const previousVal = holding.lastVal ?? quote.nav;
-
-          if (
-            shares !== holding.shares ||
-            quote.nav !== holding.lastVal ||
-            quote.navDate !== holding.lastValDate
-          ) {
-            changed = true;
-          }
-
-          return {
-            ...holding,
-            shares,
-            seedAmountEUR: undefined,
-            previousVal,
-            lastVal: quote.nav,
-            lastValDate: quote.navDate,
-            updatedAt: payload.refreshedAt,
-          };
-        });
-
-        if (!changed) return current;
-
-        const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, byIsin.get(holding.isin)), 0);
-        const nextHistory = [...history, { at: payload.refreshedAt, total: nextTotal }].slice(-48);
-        setHistory(nextHistory);
-        setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
-        persist(next, nextHistory, investedEUR);
-        return next;
+      const response = await fetch(`/api/quotes?assets=${encodeURIComponent(assetQuery)}&t=${Date.now()}`, {
+        cache: "no-store",
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as { refreshedAt: string; quotes: MarketQuote[] };
+      setQuotes(payload.quotes);
+      setLastRefresh(payload.refreshedAt);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo refrescar");
     } finally {
       setIsLoading(false);
     }
-  }, [history, investedEUR, persist]);
+  }, [assetQuery]);
 
   useEffect(() => {
     refreshQuotes();
@@ -358,246 +295,357 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refreshQuotes]);
 
-  const rows = useMemo(() => {
-    return holdings.map((holding) => {
-      const quote = quoteByIsin.get(holding.isin);
-      const value = holdingValue(holding, quote);
-      const delta = holdingDelta(holding, quote);
-      return { holding, quote, value, delta };
+  const totals = useMemo(() => {
+    const byKind = (["indices", "crypto", "stocks"] as PortfolioKind[]).map((kind) => {
+      const kindPortfolios = portfolios.filter((portfolio) => portfolio.kind === kind);
+      const value = kindPortfolios.reduce((sum, portfolio) => sum + portfolioValue(portfolio, quoteMap), 0);
+      const invested = kindPortfolios.reduce((sum, portfolio) => sum + portfolio.investedEUR, 0);
+      return { kind, value, invested, ...gainFor(value, invested), count: kindPortfolios.length };
     });
-  }, [holdings, quoteByIsin]);
+    const value = byKind.reduce((sum, item) => sum + item.value, 0);
+    const invested = byKind.reduce((sum, item) => sum + item.invested, 0);
+    return { byKind, value, invested, ...gainFor(value, invested) };
+  }, [portfolios, quoteMap]);
 
-  const activeInvestedEUR = safeNumber(investedDraft);
-  const absoluteReturn = total - activeInvestedEUR;
-  const returnRatio = activeInvestedEUR > 0 ? total / activeInvestedEUR - 1 : 0;
-  const okQuotes = quotes.filter((quote) => quote.status === "ok").length;
+  function persist(next = portfolios) {
+    const savedAt = new Date().toISOString();
+    localStorage.setItem(APP_CACHE_KEY, JSON.stringify({ portfolios: next, savedAt } satisfies AppCache));
+    setLastSavedAt(savedAt);
+  }
 
-  function saveDrafts() {
+  function save() {
     setIsSaving(true);
-    const savedAt = nowIso();
-    const nextInvestedEUR = safeNumber(investedDraft);
-    const next = holdings.map((holding) => {
-      const quote = quoteByIsin.get(holding.isin);
-      return {
-        ...holding,
-        shares: safeNumber(drafts[holding.isin] ?? String(holding.shares)),
-        previousVal: holding.lastVal,
-        lastVal: quote?.nav ?? holding.lastVal,
-        lastValDate: quote?.navDate ?? holding.lastValDate,
-        updatedAt: savedAt,
-      };
-    });
-    const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
-    const nextHistory = [...history, { at: savedAt, total: nextTotal }].slice(-48);
-    setHoldings(next);
-    setInvestedEUR(nextInvestedEUR);
-    setInvestedDraft(nextInvestedEUR.toFixed(2));
-    setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
-    setHistory(nextHistory);
-    persist(next, nextHistory, nextInvestedEUR);
+    persist();
     window.setTimeout(() => setIsSaving(false), 650);
   }
 
-  function resetPortfolio() {
-    const savedAt = nowIso();
-    const nextInvestedEUR = safeNumber(investedDraft) || DEFAULT_TOTAL;
-    const next = defaultHoldings().map((holding) => {
-      const quote = quoteByIsin.get(holding.isin);
-      const shares = quote?.nav ? nextInvestedEUR / DEFAULT_ISINS.length / quote.nav : 0;
-      return {
-        ...holding,
-        shares,
-        previousVal: quote?.nav ?? null,
-        lastVal: quote?.nav ?? null,
-        lastValDate: quote?.navDate ?? null,
-        updatedAt: savedAt,
-      };
-    });
-    const nextTotal = next.reduce((sum, holding) => sum + holdingValue(holding, quoteByIsin.get(holding.isin)), 0);
-    const nextHistory = [{ at: savedAt, total: nextTotal || nextInvestedEUR }];
-    setHoldings(next);
-    setInvestedEUR(nextInvestedEUR);
-    setInvestedDraft(nextInvestedEUR.toFixed(2));
-    setDrafts(Object.fromEntries(next.map((holding) => [holding.isin, formatShares(holding.shares)])));
-    setHistory(nextHistory);
-    persist(next, nextHistory, nextInvestedEUR);
+  function updatePortfolio(portfolioId: string, updater: (portfolio: Portfolio) => Portfolio) {
+    setPortfolios((current) => current.map((portfolio) => (portfolio.id === portfolioId ? updater(portfolio) : portfolio)));
   }
+
+  function addPortfolio(kind: PortfolioKind) {
+    setPortfolios((current) => [...current, createPortfolio(kind)]);
+    setActiveView(kind);
+  }
+
+  function addMetalPortfolio() {
+    setPortfolios((current) => [...current, metalTemplate()]);
+    setActiveView("indices");
+  }
+
+  function removePortfolio(portfolioId: string) {
+    setPortfolios((current) => current.filter((portfolio) => portfolio.id !== portfolioId));
+  }
+
+  function addPosition(portfolioId: string, symbol: string) {
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized) return;
+    updatePortfolio(portfolioId, (portfolio) => ({
+      ...portfolio,
+      positions: portfolio.positions.some((position) => position.symbol.toUpperCase() === normalized)
+        ? portfolio.positions
+        : [...portfolio.positions, { id: id(), symbol: normalized, quantity: 0 }],
+    }));
+  }
+
+  function removePosition(portfolioId: string, positionId: string) {
+    updatePortfolio(portfolioId, (portfolio) => ({
+      ...portfolio,
+      positions: portfolio.positions.filter((position) => position.id !== positionId),
+    }));
+  }
+
+  const visiblePortfolios =
+    activeView === "dashboard" ? portfolios : portfolios.filter((portfolio) => portfolio.kind === activeView);
 
   return (
     <main className="app-shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">MyInvestor</p>
-          <h1>Cartera Metal</h1>
+          <p className="eyebrow">stock.hbarrag</p>
+          <h1>Dashboard de carteras</h1>
         </div>
         <div className="actions">
-          <button className="icon-button" onClick={() => refreshQuotes()} title="Refrescar VAL">
+          <button className="icon-button" onClick={refreshQuotes} title="Refrescar precios">
             <RefreshCcw size={18} className={isLoading ? "spin" : ""} />
           </button>
-          <button className="secondary-button" onClick={resetPortfolio}>
-            <RotateCcw size={17} />
-            Reiniciar
-          </button>
-          <button className="primary-button" onClick={saveDrafts}>
+          <button className="primary-button" onClick={save}>
             {isSaving ? <Check size={17} /> : <Save size={17} />}
             Guardar
           </button>
         </div>
       </section>
 
+      <nav className="tabs">
+        <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>
+          <LayoutDashboard size={17} />
+          Dashboard
+        </button>
+        {(["indices", "crypto", "stocks"] as PortfolioKind[]).map((kind) => {
+          const Icon = KIND_META[kind].icon;
+          return (
+            <button className={activeView === kind ? "active" : ""} onClick={() => setActiveView(kind)} key={kind}>
+              <Icon size={17} />
+              {KIND_META[kind].label}
+            </button>
+          );
+        })}
+      </nav>
+
       <section className="metrics-grid">
         <article className="metric primary-metric">
           <WalletCards size={20} />
-          <span>Valor actual</span>
-          <strong>{euro.format(total)}</strong>
-          <small className={absoluteReturn >= 0 ? "positive" : "negative"}>
-            {absoluteReturn >= 0 ? "+" : ""}
-            {euro.format(absoluteReturn)} vs invertido
+          <span>Valor global</span>
+          <strong>{euro.format(totals.value)}</strong>
+          <small className={totals.amount >= 0 ? "positive" : "negative"}>
+            {totals.amount >= 0 ? "+" : ""}
+            {euro.format(totals.amount)} vs aportado
           </small>
-        </article>
-        <article className="metric editable-metric">
-          <Banknote size={20} />
-          <span>Invertido</span>
-          <label className="money-input invested-input">
-            <span>EUR</span>
-            <input
-              value={investedDraft}
-              inputMode="decimal"
-              onChange={(event) => setInvestedDraft(event.target.value)}
-            />
-          </label>
-          <small>Guardado: {euro.format(investedEUR)}</small>
         </article>
         <article className="metric">
-          {returnRatio >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-          <span>Ganancia</span>
-          <strong className={returnRatio >= 0 ? "positive" : "negative"}>
-            {returnRatio >= 0 ? "+" : ""}
-            {percent.format(returnRatio)}
+          <CircleDollarSign size={20} />
+          <span>Aportado total</span>
+          <strong>{euro.format(totals.invested)}</strong>
+          <small>Editable en cada cartera</small>
+        </article>
+        <article className="metric">
+          <LineChart size={20} />
+          <span>Ganancia global</span>
+          <strong className={totals.ratio >= 0 ? "positive" : "negative"}>
+            {totals.ratio >= 0 ? "+" : ""}
+            {percent.format(totals.ratio)}
           </strong>
-          <small className={absoluteReturn >= 0 ? "positive" : "negative"}>
-            {absoluteReturn >= 0 ? "+" : ""}
-            {euro.format(absoluteReturn)}
-          </small>
+          <small>{formatDateTime(lastRefresh)}</small>
         </article>
         <article className="metric">
           <Activity size={20} />
-          <span>Refresco proveedor</span>
+          <span>Precios</span>
           <strong>
-            {okQuotes}/{DEFAULT_ISINS.length}
+            {quotes.filter((quote) => quote.status === "ok").length}/{new Set(assetQuery.split(",").filter(Boolean)).size}
           </strong>
-          <small>{formatDateTime(lastApiRefresh)}</small>
+          <small>Refresco cada minuto</small>
         </article>
       </section>
 
-      {error && (
-        <section className="status-line error-line">
-          <AlertCircle size={18} />
-          <span>{error}</span>
-        </section>
-      )}
+      {error && <section className="status-line error-line">{error}</section>}
 
-      <section className="workspace-grid">
+      {activeView === "dashboard" && <DashboardBreakdown rows={totals.byKind} />}
+
+      <section className="workspace-grid wide">
         <div className="portfolio-panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Distribucion por participaciones</p>
-              <h2>Fondos de la cartera</h2>
+              <p className="eyebrow">{activeView === "dashboard" ? "Todas las carteras" : KIND_META[activeView].label}</p>
+              <h2>{activeView === "dashboard" ? "Carteras" : `Carteras de ${KIND_META[activeView].label}`}</h2>
             </div>
-            <p>{euro.format(total)} calculados en este navegador</p>
-          </div>
-
-          <div className="table-shell">
-            <table>
-              <thead>
-                <tr>
-                  <th>Fondo</th>
-                  <th>ISIN</th>
-                  <th>VAL</th>
-                  <th>Fecha VAL</th>
-                  <th>Participaciones</th>
-                  <th>Aporte</th>
-                  <th>Peso</th>
-                  <th>Desde cache</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(({ holding, quote, value, delta }) => {
-                  const weight = total > 0 ? value / total : 0;
-                  return (
-                    <tr key={holding.isin}>
-                      <td>
-                        <strong>{quote?.shortName ?? holding.isin}</strong>
-                        <span>{quote?.category ?? "Pendiente"}</span>
-                      </td>
-                      <td className="mono">{holding.isin}</td>
-                      <td>{valFor(holding, quote) ? valFormat.format(valFor(holding, quote)) : "Sin dato"}</td>
-                      <td>{quote?.navDate ?? holding.lastValDate ?? "Pendiente"}</td>
-                      <td>
-                        <label className="money-input unit-input">
-                          <span>PART.</span>
-                          <input
-                            value={drafts[holding.isin] ?? ""}
-                            inputMode="decimal"
-                            onChange={(event) =>
-                              setDrafts((current) => ({
-                                ...current,
-                                [holding.isin]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      </td>
-                      <td>{euro.format(value)}</td>
-                      <td>{percent.format(weight)}</td>
-                      <td className={delta.amount >= 0 ? "positive" : "negative"}>
-                        {delta.amount >= 0 ? "+" : ""}
-                        {euro.format(delta.amount)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <aside className="side-panel">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Historial local</p>
-              <h2>Ultimos refrescos</h2>
+            <div className="section-actions">
+              {activeView === "indices" && (
+                <button className="secondary-button" onClick={addMetalPortfolio}>
+                  <Plus size={16} />
+                  Anadir Metal
+                </button>
+              )}
+              {activeView !== "dashboard" && (
+                <button className="primary-button" onClick={() => addPortfolio(activeView)}>
+                  <Plus size={16} />
+                  Nueva cartera
+                </button>
+              )}
             </div>
           </div>
-          <div className="history-list">
-            {history.length === 0 ? (
-              <p className="muted">Aun no hay muestras guardadas.</p>
+
+          <div className="portfolio-list">
+            {visiblePortfolios.length === 0 ? (
+              <div className="empty-state">
+                <strong>No hay carteras todavia.</strong>
+                <span>Entra en Indices, Crypto o Acciones y crea la primera.</span>
+              </div>
             ) : (
-              history
-                .slice(-8)
-                .reverse()
-                .map((item) => (
-                  <div className="history-item" key={`${item.at}-${item.total}`}>
-                    <span>{formatDateTime(item.at)}</span>
-                    <strong>{euro.format(item.total)}</strong>
-                  </div>
-                ))
+              visiblePortfolios.map((portfolio) => (
+                <PortfolioCard
+                  key={portfolio.id}
+                  portfolio={portfolio}
+                  quotes={quoteMap}
+                  onChange={(next) => updatePortfolio(portfolio.id, () => next)}
+                  onRemove={() => removePortfolio(portfolio.id)}
+                  onAddPosition={(symbol) => addPosition(portfolio.id, symbol)}
+                  onRemovePosition={(positionId) => removePosition(portfolio.id, positionId)}
+                />
+              ))
             )}
           </div>
-
-          <div className="source-list">
-            <p className="eyebrow">Fuentes</p>
-            {quotes.map((quote) => (
-              <a key={quote.isin} href={quote.sourceUrl} target="_blank" rel="noreferrer">
-                <span>{quote.shortName}</span>
-                <strong className={quote.status === "ok" ? "positive" : "negative"}>
-                  {quote.source}
-                </strong>
-              </a>
-            ))}
-          </div>
-        </aside>
+        </div>
       </section>
+
+      <footer className="footer-line">Ultimo guardado: {formatDateTime(lastSavedAt)}</footer>
     </main>
   );
+}
+
+function DashboardBreakdown({ rows }: { rows: Array<{ kind: PortfolioKind; value: number; invested: number; amount: number; ratio: number; count: number }> }) {
+  return (
+    <section className="breakdown-grid">
+      {rows.map((row) => {
+        const Icon = KIND_META[row.kind].icon;
+        return (
+          <article className="breakdown-card" key={row.kind}>
+            <Icon size={19} />
+            <span>{KIND_META[row.kind].label}</span>
+            <strong>{euro.format(row.value)}</strong>
+            <small className={row.amount >= 0 ? "positive" : "negative"}>
+              {row.amount >= 0 ? "+" : ""}
+              {percent.format(row.ratio)} · {euro.format(row.amount)}
+            </small>
+            <em>{row.count} cartera(s)</em>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function PortfolioCard({
+  portfolio,
+  quotes,
+  onChange,
+  onRemove,
+  onAddPosition,
+  onRemovePosition,
+}: {
+  portfolio: Portfolio;
+  quotes: Map<string, MarketQuote>;
+  onChange: (portfolio: Portfolio) => void;
+  onRemove: () => void;
+  onAddPosition: (symbol: string) => void;
+  onRemovePosition: (positionId: string) => void;
+}) {
+  const [assetToAdd, setAssetToAdd] = useState(defaultOptionFor(portfolio.kind));
+  const value = portfolioValue(portfolio, quotes);
+  const gain = gainFor(value, portfolio.investedEUR);
+  const options = optionsFor(portfolio.kind);
+
+  return (
+    <article className="portfolio-card">
+      <div className="portfolio-card-header">
+        <div>
+          <input
+            className="portfolio-name"
+            value={portfolio.name}
+            onChange={(event) => onChange({ ...portfolio, name: event.target.value })}
+          />
+          <span>{KIND_META[portfolio.kind].label}</span>
+        </div>
+        <button className="danger-button" onClick={onRemove} title="Eliminar cartera">
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      <div className="portfolio-summary">
+        <label className="money-input invested-input">
+          <span>EUR</span>
+          <input
+            value={compactNumber(portfolio.investedEUR)}
+            inputMode="decimal"
+            onChange={(event) => onChange({ ...portfolio, investedEUR: safeNumber(event.target.value) })}
+          />
+        </label>
+        <div>
+          <span>Valor</span>
+          <strong>{euro.format(value)}</strong>
+        </div>
+        <div>
+          <span>Ganancia</span>
+          <strong className={gain.amount >= 0 ? "positive" : "negative"}>
+            {gain.amount >= 0 ? "+" : ""}
+            {percent.format(gain.ratio)}
+          </strong>
+        </div>
+      </div>
+
+      <div className="add-row">
+        <select value={assetToAdd} onChange={(event) => setAssetToAdd(event.target.value)}>
+          {options.map((asset) => (
+            <option value={asset.symbol} key={asset.symbol}>
+              {asset.label} · {asset.symbol}
+            </option>
+          ))}
+        </select>
+        <input
+          value={assetToAdd}
+          onChange={(event) => setAssetToAdd(event.target.value.toUpperCase())}
+          placeholder={portfolio.kind === "stocks" ? "AAPL, IBE.MC..." : "BTC-EUR..."}
+        />
+        <button className="secondary-button" onClick={() => onAddPosition(assetToAdd)}>
+          <Plus size={16} />
+          Anadir activo
+        </button>
+      </div>
+
+      <div className="table-shell compact-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Activo</th>
+              <th>Cantidad</th>
+              <th>Precio EUR</th>
+              <th>Valor</th>
+              <th>Dia</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {portfolio.positions.map((position) => {
+              const quote = quotes.get(quoteKey(portfolio.kind, position.symbol));
+              const rowValue = positionValue(position, portfolio, quotes);
+              return (
+                <tr key={position.id}>
+                  <td>
+                    <strong>{quote?.shortName ?? position.symbol}</strong>
+                    <span className="mono">{position.symbol}</span>
+                  </td>
+                  <td>
+                    <label className="money-input unit-input">
+                      <span>{portfolio.kind === "indices" ? "PART." : "UD."}</span>
+                      <input
+                        value={compactNumber(position.quantity)}
+                        inputMode="decimal"
+                        onChange={(event) =>
+                          onChange({
+                            ...portfolio,
+                            positions: portfolio.positions.map((item) =>
+                              item.id === position.id ? { ...item, quantity: safeNumber(event.target.value) } : item,
+                            ),
+                          })
+                        }
+                      />
+                    </label>
+                  </td>
+                  <td>{quote?.priceEUR ? priceFormat.format(quote.priceEUR) : "Sin dato"}</td>
+                  <td>{euro.format(rowValue)}</td>
+                  <td className={(quote?.changePercent ?? 0) >= 0 ? "positive" : "negative"}>
+                    {quote?.changePercent == null ? "Pendiente" : `${quote.changePercent >= 0 ? "+" : ""}${quote.changePercent.toFixed(2)} %`}
+                  </td>
+                  <td>
+                    <button className="icon-button small" onClick={() => onRemovePosition(position.id)}>
+                      <Trash2 size={15} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+
+function optionsFor(kind: PortfolioKind) {
+  if (kind === "indices") return INDEX_OPTIONS;
+  if (kind === "crypto") return CRYPTO_OPTIONS;
+  return STOCK_OPTIONS;
+}
+
+function defaultOptionFor(kind: PortfolioKind) {
+  return optionsFor(kind)[0]?.symbol ?? "";
 }
