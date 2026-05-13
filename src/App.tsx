@@ -16,6 +16,7 @@ import {
   Trash2,
   Upload,
   WalletCards,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -78,6 +79,24 @@ type HistorySnapshot = {
 type HistoryCache = {
   hourly: HistorySnapshot[];
   daily: HistorySnapshot[];
+};
+
+type TrendWindow = "1h" | "1d";
+
+type TrendPoint = {
+  label: string;
+  capturedAt: string;
+  value: number;
+  invested: number;
+};
+
+type TrendDialog = {
+  bucket: TrendWindow;
+  points: TrendPoint[];
+  summary: {
+    amount: number;
+    ratio: number;
+  } | null;
 };
 
 type PrivacyCache = {
@@ -277,6 +296,57 @@ function resolveTrend(history: HistorySnapshot[], bucket: "hourly" | "daily", cu
   return { label: bucket === "hourly" ? "1h" : "1d", amount, ratio, capturedAt: snapshot.capturedAt };
 }
 
+function trendLabel(bucket: TrendWindow, capturedAt: string) {
+  return new Intl.DateTimeFormat(
+    "es-ES",
+    bucket === "1h"
+      ? { day: "2-digit", month: "2-digit", hour: "2-digit" }
+      : { day: "2-digit", month: "2-digit" },
+  ).format(new Date(capturedAt));
+}
+
+function buildTrendSeries(
+  history: HistorySnapshot[],
+  bucket: TrendWindow,
+  currentValue: number,
+  currentInvested: number,
+  referenceAt?: string | null,
+) {
+  const ordered = [...history].sort((left, right) => left.capturedAt.localeCompare(right.capturedAt));
+  const currentAt = referenceAt ?? new Date().toISOString();
+  const currentBucket = bucketKeyFor(new Date(currentAt), bucket === "1h" ? "hourly" : "daily");
+  const points = ordered.map((snapshot) => ({
+    label: trendLabel(bucket, snapshot.capturedAt),
+    capturedAt: snapshot.capturedAt,
+    value: snapshot.value,
+    invested: snapshot.invested,
+  }));
+
+  const currentPoint: TrendPoint = {
+    label: trendLabel(bucket, currentAt),
+    capturedAt: currentAt,
+    value: currentValue,
+    invested: currentInvested,
+  };
+
+  const lastSnapshot = ordered.at(-1);
+  if (!lastSnapshot || lastSnapshot.bucketKey !== currentBucket) {
+    points.push(currentPoint);
+  } else {
+    points[points.length - 1] = currentPoint;
+  }
+
+  if (points.length < 2) {
+    return { points, summary: null };
+  }
+
+  const first = points[0];
+  const last = points.at(-1) ?? first;
+  const amount = last.value - first.value;
+  const ratio = first.value > 0 ? last.value / first.value - 1 : 0;
+  return { points, summary: { amount, ratio } };
+}
+
 function readPrivacyCache(): PrivacyCache {
   try {
     const cached = localStorage.getItem(PRIVACY_CACHE_KEY);
@@ -405,7 +475,8 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyCache, setHistoryCache] = useState<HistoryCache>(emptyHistory());
-  const [trendWindow, setTrendWindow] = useState<"1h" | "1d">("1h");
+  const [loadingTrend, setLoadingTrend] = useState<TrendWindow | null>(null);
+  const [trendDialog, setTrendDialog] = useState<TrendDialog | null>(null);
   const [pricesHidden, setPricesHidden] = useState(false);
   const [pattern, setPattern] = useState<string | null>(null);
   const [patternDialog, setPatternDialog] = useState<PatternDialog | null>(null);
@@ -524,7 +595,6 @@ export default function App() {
     }),
     [historyCache.daily, historyCache.hourly, lastRefresh, totals.value],
   );
-  const selectedTrend = trendMetrics[trendWindow];
 
   function persist(next = portfolios, nextHistory = historyCache) {
     const savedAt = new Date().toISOString();
@@ -674,6 +744,17 @@ export default function App() {
     setPatternDialog(null);
   }
 
+  function openTrendChart(bucket: TrendWindow) {
+    if (loadingTrend) return;
+    setLoadingTrend(bucket);
+    window.setTimeout(() => {
+      const source = bucket === "1h" ? historyCache.hourly : historyCache.daily;
+      const result = buildTrendSeries(source, bucket, totals.value, totals.invested, lastRefresh);
+      setTrendDialog({ bucket, points: result.points, summary: result.summary });
+      setLoadingTrend(null);
+    }, 180);
+  }
+
   const visiblePortfolios =
     activeView === "dashboard" ? portfolios : portfolios.filter((portfolio) => portfolio.kind === activeView);
 
@@ -734,8 +815,8 @@ export default function App() {
           <div className="metric-header">
             <WalletCards size={20} />
             <div className="trend-toggle" role="tablist" aria-label="Ventana historica">
-              <TrendButton active={trendWindow === "1h"} label="1h" onClick={() => setTrendWindow("1h")} />
-              <TrendButton active={trendWindow === "1d"} label="1d" onClick={() => setTrendWindow("1d")} />
+              <TrendButton loading={loadingTrend === "1h"} label="1h" onClick={() => openTrendChart("1h")} />
+              <TrendButton loading={loadingTrend === "1d"} label="1d" onClick={() => openTrendChart("1d")} />
             </div>
           </div>
           <span>Valor global</span>
@@ -746,10 +827,10 @@ export default function App() {
             {totals.amount >= 0 ? "+" : ""}
             <SecretValue hidden={pricesHidden}>{euro.format(totals.amount)}</SecretValue> vs aportado
           </small>
-          <small className={`trend-caption ${selectedTrend ? (selectedTrend.amount >= 0 ? "positive" : "negative") : ""}`}>
-            {selectedTrend
-              ? `${trendWindow} ${selectedTrend.amount >= 0 ? "+" : ""}${percent.format(selectedTrend.ratio)} · ${euro.format(selectedTrend.amount)}`
-              : `Sin historico ${trendWindow} todavia`}
+          <small className="trend-caption">
+            {trendMetrics["1h"] || trendMetrics["1d"]
+              ? "Pulsa 1h o 1d para abrir el grafico global"
+              : "Se ira llenando historico global al refrescar precios"}
           </small>
         </article>
         <article className="metric">
@@ -831,6 +912,10 @@ export default function App() {
       </section>
 
       <footer className="footer-line">Ultimo guardado: {formatDateTime(lastSavedAt)}</footer>
+
+      {trendDialog && (
+        <TrendChartModal dialog={trendDialog} pricesHidden={pricesHidden} onClose={() => setTrendDialog(null)} />
+      )}
 
       {patternDialog && (
         <PatternModal
@@ -1009,12 +1094,126 @@ function SecretValue({ hidden, children }: { hidden: boolean; children: React.Re
   return <span className={hidden ? "masked-value" : undefined}>{hidden ? "******" : children}</span>;
 }
 
-function TrendButton({ active, label, onClick }: { active: boolean; label: "1h" | "1d"; onClick: () => void }) {
+function TrendButton({ loading, label, onClick }: { loading: boolean; label: TrendWindow; onClick: () => void }) {
   return (
-    <button className={active ? "trend-button active" : "trend-button"} onClick={onClick} type="button" title={`Historico ${label}`}>
-      <LineChart size={14} />
-      {label}
+    <button
+      className={loading ? "trend-button loading" : "trend-button"}
+      onClick={onClick}
+      type="button"
+      title={`Historico ${label}`}
+      disabled={loading}
+    >
+      {loading ? <RefreshCcw size={14} className="spin" /> : <LineChart size={14} />}
+      {loading ? "Cargando" : label}
     </button>
+  );
+}
+
+function TrendChartModal({
+  dialog,
+  pricesHidden,
+  onClose,
+}: {
+  dialog: TrendDialog;
+  pricesHidden: boolean;
+  onClose: () => void;
+}) {
+  const width = 720;
+  const height = 260;
+  const padding = 30;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+  const ticks = 4;
+  const allValues = dialog.points.flatMap((point) => [point.value, point.invested]);
+  const minValue = Math.min(...allValues);
+  const maxValue = Math.max(...allValues);
+  const range = maxValue - minValue || Math.max(maxValue, 1);
+  const lastPoint = dialog.points.at(-1) ?? null;
+  const sampleIndexes = Array.from(
+    new Set([0, Math.floor((dialog.points.length - 1) / 3), Math.floor(((dialog.points.length - 1) * 2) / 3), dialog.points.length - 1]),
+  ).filter((index) => index >= 0);
+
+  function positionX(index: number) {
+    if (dialog.points.length <= 1) return padding;
+    return padding + (index / (dialog.points.length - 1)) * chartWidth;
+  }
+
+  function positionY(value: number) {
+    return padding + (1 - (value - minValue) / range) * chartHeight;
+  }
+
+  function buildPath(values: number[]) {
+    return values
+      .map((value, index) => `${index === 0 ? "M" : "L"} ${positionX(index).toFixed(2)} ${positionY(value).toFixed(2)}`)
+      .join(" ");
+  }
+
+  const valuePath = buildPath(dialog.points.map((point) => point.value));
+  const investedPath = buildPath(dialog.points.map((point) => point.invested));
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="trend-chart-title">
+      <div className="chart-modal">
+        <div className="pattern-modal-header">
+          <div>
+            <p className="eyebrow">Historico global</p>
+            <h2 id="trend-chart-title">Grafico {dialog.bucket}</h2>
+          </div>
+          <button className="icon-button small" onClick={onClose} title="Cerrar">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="chart-summary">
+          <div className="chart-summary-item">
+            <span>Actual</span>
+            <strong>
+              <SecretValue hidden={pricesHidden}>{lastPoint ? euro.format(lastPoint.value) : "Sin dato"}</SecretValue>
+            </strong>
+          </div>
+          <div className="chart-summary-item">
+            <span>Periodo</span>
+            <strong className={dialog.summary ? (dialog.summary.amount >= 0 ? "positive" : "negative") : undefined}>
+              {dialog.summary ? `${dialog.summary.amount >= 0 ? "+" : ""}${percent.format(dialog.summary.ratio)}` : "Sin base"}
+            </strong>
+          </div>
+          <div className="chart-summary-item">
+            <span>Muestras</span>
+            <strong>{dialog.points.length}</strong>
+          </div>
+        </div>
+
+        {dialog.points.length < 2 ? (
+          <div className="chart-empty">
+            <strong>No hay suficientes datos todavia.</strong>
+            <span>La app ira calculando el historico global al refrescar precios.</span>
+          </div>
+        ) : (
+          <div className="chart-shell">
+            <div className="chart-legend">
+              <span><i className="legend-line value-line" /> Valor global</span>
+              <span><i className="legend-line invested-line" /> Aportado global</span>
+            </div>
+            <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} aria-label={`Grafico ${dialog.bucket}`}>
+              {Array.from({ length: ticks + 1 }, (_, index) => {
+                const y = padding + (chartHeight / ticks) * index;
+                return <line key={index} x1={padding} x2={width - padding} y1={y} y2={y} className="chart-grid" />;
+              })}
+              <path d={investedPath} className="chart-path invested-path" />
+              <path d={valuePath} className="chart-path value-path" />
+              {dialog.points.map((point, index) => (
+                <circle key={point.capturedAt} cx={positionX(index)} cy={positionY(point.value)} r={index === dialog.points.length - 1 ? 4.5 : 3} className="chart-dot" />
+              ))}
+            </svg>
+            <div className="chart-axis">
+              {sampleIndexes.map((index) => (
+                <span key={`${dialog.bucket}-${dialog.points[index]?.capturedAt}`}>{dialog.points[index]?.label}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

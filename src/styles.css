@@ -215,7 +215,7 @@ h2 {
   color: currentColor;
 }
 
-.trend-button.active {
+.trend-button.loading {
   border-color: rgba(125, 211, 199, 0.65);
   background: rgba(125, 211, 199, 0.18);
   color: white;
@@ -282,7 +282,7 @@ h2 {
   box-shadow: none;
 }
 
-.primary-metric .trend-button.active {
+.primary-metric .trend-button.loading {
   border-color: rgba(125, 211, 199, 0.78);
   background: rgba(125, 211, 199, 0.22);
   color: white;
@@ -757,6 +757,149 @@ td span {
   overflow-wrap: anywhere;
 }
 
+.chart-modal {
+  width: min(860px, 100%);
+  padding: 18px;
+  border: 1px solid rgba(217, 223, 219, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 90px rgba(17, 32, 28, 0.28);
+}
+
+.chart-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.chart-summary-item {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+
+.chart-summary-item span,
+.chart-summary-item strong {
+  display: block;
+}
+
+.chart-summary-item span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.chart-summary-item strong {
+  margin-top: 6px;
+  font-size: 1.2rem;
+}
+
+.chart-empty {
+  display: grid;
+  gap: 6px;
+  min-height: 180px;
+  place-content: center;
+  text-align: center;
+  color: var(--muted);
+}
+
+.chart-empty strong {
+  color: var(--ink);
+  font-size: 1.12rem;
+}
+
+.chart-shell {
+  padding: 10px 0 4px;
+}
+
+.chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-line {
+  display: inline-block;
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+}
+
+.value-line {
+  background: var(--accent);
+}
+
+.invested-line {
+  background: #90a19a;
+}
+
+.trend-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(248, 250, 248, 0.92), rgba(255, 255, 255, 0.96));
+}
+
+.chart-grid {
+  stroke: rgba(217, 223, 219, 0.95);
+  stroke-width: 1;
+}
+
+.chart-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.value-path {
+  stroke: var(--accent);
+}
+
+.invested-path {
+  stroke: #90a19a;
+  stroke-dasharray: 8 8;
+}
+
+.chart-dot {
+  fill: white;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.chart-axis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chart-axis span:nth-child(2),
+.chart-axis span:nth-child(3) {
+  text-align: center;
+}
+
+.chart-axis span:last-child {
+  text-align: right;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -938,6 +1081,22 @@ td span {
     min-height: 32px;
     padding: 0 9px;
     font-size: 0.74rem;
+  }
+
+  .chart-modal {
+    padding: 14px;
+  }
+
+  .chart-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-summary-item strong {
+    font-size: 1.3rem;
+  }
+
+  .chart-axis {
+    font-size: 0.72rem;
   }
 
   .portfolio-list {
