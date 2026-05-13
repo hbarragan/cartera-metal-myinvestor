@@ -183,6 +183,44 @@ h2 {
   color: var(--accent);
 }
 
+.metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trend-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trend-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(217, 223, 219, 0.85);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(22, 35, 31, 0.08);
+}
+
+.trend-button svg {
+  color: currentColor;
+}
+
+.trend-button.active {
+  border-color: rgba(125, 211, 199, 0.65);
+  background: rgba(125, 211, 199, 0.18);
+  color: white;
+}
+
 .metric span,
 .metric small {
   display: block;
@@ -204,6 +242,10 @@ h2 {
 
 .metric small {
   color: var(--muted);
+}
+
+.trend-caption {
+  margin-top: 8px;
 }
 
 .editable-metric .money-input {
@@ -231,6 +273,19 @@ h2 {
 
 .primary-metric svg {
   color: #7dd3c7;
+}
+
+.primary-metric .trend-button {
+  border-color: rgba(125, 211, 199, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+  box-shadow: none;
+}
+
+.primary-metric .trend-button.active {
+  border-color: rgba(125, 211, 199, 0.78);
+  background: rgba(125, 211, 199, 0.22);
+  color: white;
 }
 
 .workspace-grid {
@@ -851,11 +906,38 @@ td span {
   }
 
   .metric strong {
-    font-size: clamp(1.9rem, 8vw, 2.45rem);
+    font-size: clamp(2.1rem, 8.8vw, 2.75rem);
   }
 
   .breakdown-card strong {
-    font-size: 1.75rem;
+    font-size: 1.95rem;
+  }
+
+  .metric span,
+  .breakdown-card span {
+    font-size: 0.94rem;
+  }
+
+  .metric small,
+  .breakdown-card small,
+  .breakdown-card em {
+    font-size: 0.9rem;
+  }
+
+  .metric-header {
+    align-items: flex-start;
+  }
+
+  .trend-toggle {
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .trend-button {
+    min-height: 32px;
+    padding: 0 9px;
+    font-size: 0.74rem;
   }
 
   .portfolio-list {

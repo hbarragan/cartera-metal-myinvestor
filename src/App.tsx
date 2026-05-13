@@ -65,6 +65,19 @@ type AssetSearchResult = {
 type AppCache = {
   portfolios: Portfolio[];
   savedAt: string;
+  history?: HistoryCache;
+};
+
+type HistorySnapshot = {
+  bucketKey: string;
+  capturedAt: string;
+  value: number;
+  invested: number;
+};
+
+type HistoryCache = {
+  hourly: HistorySnapshot[];
+  daily: HistorySnapshot[];
 };
 
 type PrivacyCache = {
@@ -86,6 +99,7 @@ type LegacyHolding = {
 };
 
 const APP_CACHE_KEY = "stock-hbarrag:v1";
+const HISTORY_CACHE_KEY = "stock-hbarrag:history:v1";
 const PRIVACY_CACHE_KEY = "stock-hbarrag:privacy:v1";
 const AUTO_HIDE_MS = 60_000;
 const LEGACY_KEYS = [
@@ -162,6 +176,105 @@ function formatDateTime(value?: string | null) {
     dateStyle: "short",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function emptyHistory(): HistoryCache {
+  return { hourly: [], daily: [] };
+}
+
+function normalizeHistorySnapshots(value: unknown): HistorySnapshot[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const snapshot = item as Partial<HistorySnapshot>;
+      if (!snapshot.bucketKey || !snapshot.capturedAt) return null;
+      return {
+        bucketKey: String(snapshot.bucketKey),
+        capturedAt: String(snapshot.capturedAt),
+        value: safeNumber(snapshot.value ?? 0),
+        invested: safeNumber(snapshot.invested ?? 0),
+      };
+    })
+    .filter(Boolean) as HistorySnapshot[];
+}
+
+function normalizeHistoryCache(value: unknown): HistoryCache {
+  if (!value || typeof value !== "object") return emptyHistory();
+  const candidate = value as Partial<HistoryCache>;
+  return {
+    hourly: normalizeHistorySnapshots(candidate.hourly),
+    daily: normalizeHistorySnapshots(candidate.daily),
+  };
+}
+
+function readHistoryCache(): HistoryCache {
+  try {
+    const cached = localStorage.getItem(HISTORY_CACHE_KEY);
+    return cached ? normalizeHistoryCache(JSON.parse(cached)) : emptyHistory();
+  } catch {
+    localStorage.removeItem(HISTORY_CACHE_KEY);
+    return emptyHistory();
+  }
+}
+
+function bucketKeyFor(date: Date, bucket: "hourly" | "daily") {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  if (bucket === "daily") return `${year}-${month}-${day}`;
+  const hour = `${date.getHours()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}`;
+}
+
+function shiftDate(date: Date, bucket: "hourly" | "daily") {
+  const next = new Date(date);
+  if (bucket === "hourly") next.setHours(next.getHours() - 1);
+  else next.setDate(next.getDate() - 1);
+  return next;
+}
+
+function upsertSnapshot(list: HistorySnapshot[], next: HistorySnapshot) {
+  const index = list.findIndex((snapshot) => snapshot.bucketKey === next.bucketKey);
+  if (index === -1) return [...list, next];
+  const copy = [...list];
+  copy[index] = next;
+  return copy;
+}
+
+function applyHistorySnapshot(history: HistoryCache, capturedAt: string, value: number, invested: number) {
+  const stamp = new Date(capturedAt);
+  const hourly = upsertSnapshot(history.hourly, {
+    bucketKey: bucketKeyFor(stamp, "hourly"),
+    capturedAt,
+    value,
+    invested,
+  });
+  const daily = upsertSnapshot(history.daily, {
+    bucketKey: bucketKeyFor(stamp, "daily"),
+    capturedAt,
+    value,
+    invested,
+  });
+
+  const sameHourly =
+    hourly.length === history.hourly.length &&
+    hourly.every((snapshot, index) => snapshot === history.hourly[index]);
+  const sameDaily =
+    daily.length === history.daily.length &&
+    daily.every((snapshot, index) => snapshot === history.daily[index]);
+
+  return sameHourly && sameDaily ? history : { hourly, daily };
+}
+
+function resolveTrend(history: HistorySnapshot[], bucket: "hourly" | "daily", currentValue: number, referenceAt?: string | null) {
+  const baseDate = referenceAt ? new Date(referenceAt) : new Date();
+  const previousKey = bucketKeyFor(shiftDate(baseDate, bucket), bucket);
+  const snapshot = history.find((item) => item.bucketKey === previousKey);
+  if (!snapshot) return null;
+  const amount = currentValue - snapshot.value;
+  const ratio = snapshot.value > 0 ? currentValue / snapshot.value - 1 : 0;
+  return { label: bucket === "hourly" ? "1h" : "1d", amount, ratio, capturedAt: snapshot.capturedAt };
 }
 
 function readPrivacyCache(): PrivacyCache {
@@ -291,6 +404,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyCache, setHistoryCache] = useState<HistoryCache>(emptyHistory());
+  const [trendWindow, setTrendWindow] = useState<"1h" | "1d">("1h");
   const [pricesHidden, setPricesHidden] = useState(false);
   const [pattern, setPattern] = useState<string | null>(null);
   const [patternDialog, setPatternDialog] = useState<PatternDialog | null>(null);
@@ -301,6 +416,8 @@ export default function App() {
     const privacy = readPrivacyCache();
     setPricesHidden(privacy.hidden);
     setPattern(privacy.pattern);
+    const localHistory = readHistoryCache();
+    let restoredHistory = localHistory;
 
     const cached = localStorage.getItem(APP_CACHE_KEY);
     if (cached) {
@@ -308,6 +425,10 @@ export default function App() {
         const parsed = JSON.parse(cached) as AppCache;
         setPortfolios(parsed.portfolios ?? []);
         setLastSavedAt(parsed.savedAt ?? null);
+        if (!localHistory.hourly.length && !localHistory.daily.length && parsed.history) {
+          restoredHistory = normalizeHistoryCache(parsed.history);
+        }
+        setHistoryCache(restoredHistory);
         return;
       } catch {
         localStorage.removeItem(APP_CACHE_KEY);
@@ -315,6 +436,7 @@ export default function App() {
     }
 
     const migratedMetal = metalPortfolioFromLegacy();
+    setHistoryCache(restoredHistory);
     setPortfolios(migratedMetal ? [migratedMetal] : []);
   }, []);
 
@@ -328,6 +450,10 @@ export default function App() {
     setPricesHidden(hidden);
     setPattern(nextPattern);
   }, [pattern]);
+
+  const persistHistory = useCallback((next: HistoryCache) => {
+    localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify(next));
+  }, []);
 
   const quoteMap = useMemo(
     () => new Map(quotes.map((quote) => [quoteKey(quote.kind, quote.symbol), quote])),
@@ -382,9 +508,27 @@ export default function App() {
     return { byKind, value, invested, ...gainFor(value, invested) };
   }, [portfolios, quoteMap]);
 
-  function persist(next = portfolios) {
+  useEffect(() => {
+    if (!portfolios.length || totals.value <= 0 || !lastRefresh) return;
+    setHistoryCache((current) => {
+      const next = applyHistorySnapshot(current, lastRefresh, totals.value, totals.invested);
+      if (next !== current) persistHistory(next);
+      return next;
+    });
+  }, [lastRefresh, persistHistory, portfolios.length, totals.invested, totals.value]);
+
+  const trendMetrics = useMemo(
+    () => ({
+      "1h": resolveTrend(historyCache.hourly, "hourly", totals.value, lastRefresh),
+      "1d": resolveTrend(historyCache.daily, "daily", totals.value, lastRefresh),
+    }),
+    [historyCache.daily, historyCache.hourly, lastRefresh, totals.value],
+  );
+  const selectedTrend = trendMetrics[trendWindow];
+
+  function persist(next = portfolios, nextHistory = historyCache) {
     const savedAt = new Date().toISOString();
-    localStorage.setItem(APP_CACHE_KEY, JSON.stringify({ portfolios: next, savedAt } satisfies AppCache));
+    localStorage.setItem(APP_CACHE_KEY, JSON.stringify({ portfolios: next, savedAt, history: nextHistory } satisfies AppCache));
     setLastSavedAt(savedAt);
   }
 
@@ -396,7 +540,7 @@ export default function App() {
 
   function exportPortfolios() {
     const savedAt = new Date().toISOString();
-    const payload: AppCache = { portfolios, savedAt };
+    const payload: AppCache = { portfolios, savedAt, history: historyCache };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -423,6 +567,7 @@ export default function App() {
     try {
       const parsed = JSON.parse(await file.text()) as Partial<AppCache> | Portfolio[];
       const rawPortfolios = Array.isArray(parsed) ? parsed : parsed.portfolios;
+      const importedHistory = Array.isArray(parsed) ? emptyHistory() : normalizeHistoryCache(parsed.history);
       const imported = (rawPortfolios ?? [])
         .map((portfolio) => normalizeImportedPortfolio(portfolio))
         .filter(Boolean) as Portfolio[];
@@ -430,8 +575,10 @@ export default function App() {
       if (!imported.length) throw new Error("El archivo no contiene carteras validas");
 
       setPortfolios(imported);
+      setHistoryCache(importedHistory);
       setActiveView("dashboard");
-      persist(imported);
+      persistHistory(importedHistory);
+      persist(imported, importedHistory);
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo importar el archivo");
@@ -584,7 +731,13 @@ export default function App() {
 
       <section className="metrics-grid">
         <article className="metric primary-metric">
-          <WalletCards size={20} />
+          <div className="metric-header">
+            <WalletCards size={20} />
+            <div className="trend-toggle" role="tablist" aria-label="Ventana historica">
+              <TrendButton active={trendWindow === "1h"} label="1h" onClick={() => setTrendWindow("1h")} />
+              <TrendButton active={trendWindow === "1d"} label="1d" onClick={() => setTrendWindow("1d")} />
+            </div>
+          </div>
           <span>Valor global</span>
           <strong>
             <SecretValue hidden={pricesHidden}>{euro.format(totals.value)}</SecretValue>
@@ -592,6 +745,11 @@ export default function App() {
           <small className={totals.amount >= 0 ? "positive" : "negative"}>
             {totals.amount >= 0 ? "+" : ""}
             <SecretValue hidden={pricesHidden}>{euro.format(totals.amount)}</SecretValue> vs aportado
+          </small>
+          <small className={`trend-caption ${selectedTrend ? (selectedTrend.amount >= 0 ? "positive" : "negative") : ""}`}>
+            {selectedTrend
+              ? `${trendWindow} ${selectedTrend.amount >= 0 ? "+" : ""}${percent.format(selectedTrend.ratio)} · ${euro.format(selectedTrend.amount)}`
+              : `Sin historico ${trendWindow} todavia`}
           </small>
         </article>
         <article className="metric">
@@ -849,6 +1007,15 @@ function PortfolioCard({
 
 function SecretValue({ hidden, children }: { hidden: boolean; children: React.ReactNode }) {
   return <span className={hidden ? "masked-value" : undefined}>{hidden ? "******" : children}</span>;
+}
+
+function TrendButton({ active, label, onClick }: { active: boolean; label: "1h" | "1d"; onClick: () => void }) {
+  return (
+    <button className={active ? "trend-button active" : "trend-button"} onClick={onClick} type="button" title={`Historico ${label}`}>
+      <LineChart size={14} />
+      {label}
+    </button>
+  );
 }
 
 function PatternModal({
