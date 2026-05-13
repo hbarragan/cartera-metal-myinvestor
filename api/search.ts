@@ -1,4 +1,4 @@
-type AssetKind = "indices" | "crypto" | "stocks";
+import { INDEX_FUNDS, normalizeAssetKind, requestHeaders, type AssetKind } from "./lib/market";
 
 type SearchResult = {
   kind: AssetKind;
@@ -17,26 +17,6 @@ type YahooSearchQuote = {
   quoteType?: string;
 };
 
-const INDEX_FUNDS = [
-  { symbol: "IE000N4ZYX28", name: "iShares US Index Fund (IE) S Acc EUR", exchange: "BlackRock" },
-  { symbol: "IE000N51F726", name: "iShares Developed World Screened Index Fund (IE) D Acc EUR", exchange: "BlackRock" },
-  { symbol: "IE000QAZP7L2", name: "iShares Emerging Markets Index Fund (IE) S Acc EUR", exchange: "BlackRock" },
-  { symbol: "IE00BYX5N771", name: "Fidelity MSCI Japan Index Fund P-Acc-EUR", exchange: "Quefondos" },
-  { symbol: "IE00B1G3DH73", name: "Vanguard U.S. 500 Stock Index Fund EUR Hedged Acc", exchange: "Quefondos" },
-  { symbol: "IE00BYX5MD61", name: "Fidelity MSCI Europe Index Fund P-Acc-EUR", exchange: "Quefondos" },
-  { symbol: "IE00BDZVHT63", name: "Fidelity MSCI Pacific ex-Japan Index Fund P-Acc-USD", exchange: "Quefondos" },
-];
-
-const requestHeaders = {
-  "user-agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-  accept: "application/json,text/plain,*/*",
-};
-
-function normalizeKind(value: string | null): AssetKind {
-  return value === "indices" || value === "crypto" || value === "stocks" ? value : "stocks";
-}
-
 function yahooAllowed(kind: AssetKind, quoteType = "") {
   const type = quoteType.toUpperCase();
   if (kind === "crypto") return type === "CRYPTOCURRENCY";
@@ -46,7 +26,9 @@ function yahooAllowed(kind: AssetKind, quoteType = "") {
 
 async function yahooSearch(kind: AssetKind, query: string): Promise<SearchResult[]> {
   if (!query) return [];
-  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=12&newsCount=0`;
+  const url =
+    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}` +
+    "&quotesCount=12&newsCount=0";
   const response = await fetch(url, { headers: requestHeaders });
   if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
   const payload = await response.json();
@@ -66,17 +48,33 @@ async function yahooSearch(kind: AssetKind, query: string): Promise<SearchResult
 
 function indexFundSearch(query: string): SearchResult[] {
   const q = query.trim().toLowerCase();
-  if (!q) return INDEX_FUNDS.map((fund) => ({ kind: "indices" as const, ...fund, type: "FONDO", source: fund.exchange }));
+  if (!q) {
+    return INDEX_FUNDS.map((fund) => ({
+      kind: "indices" as const,
+      symbol: fund.symbol,
+      name: fund.name,
+      exchange: fund.provider === "blackrock" ? "BlackRock" : "Quefondos",
+      type: "FONDO",
+      source: fund.provider === "blackrock" ? "BlackRock" : "Quefondos",
+    }));
+  }
 
   return INDEX_FUNDS.filter(
     (fund) => fund.symbol.toLowerCase().includes(q) || fund.name.toLowerCase().includes(q),
-  ).map((fund) => ({ kind: "indices" as const, ...fund, type: "FONDO", source: fund.exchange }));
+  ).map((fund) => ({
+    kind: "indices" as const,
+    symbol: fund.symbol,
+    name: fund.name,
+    exchange: fund.provider === "blackrock" ? "BlackRock" : "Quefondos",
+    type: "FONDO",
+    source: fund.provider === "blackrock" ? "BlackRock" : "Quefondos",
+  }));
 }
 
 export default async function handler(request: { url?: string }, response: any) {
   try {
     const url = new URL(request.url ?? "", "https://local.app");
-    const kind = normalizeKind(url.searchParams.get("kind"));
+    const kind = normalizeAssetKind(url.searchParams.get("kind"));
     const query = url.searchParams.get("q")?.trim() ?? "";
 
     const [funds, yahoo] = await Promise.all([

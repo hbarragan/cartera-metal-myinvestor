@@ -82,6 +82,7 @@ type HistoryCache = {
 };
 
 type TrendWindow = "1h" | "1d";
+type TrendRange = "1d" | "5d" | "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y" | "10y" | "max";
 
 type TrendPoint = {
   label: string;
@@ -92,11 +93,38 @@ type TrendPoint = {
 
 type TrendDialog = {
   bucket: TrendWindow;
+  range: TrendRange;
+  ranges: TrendRange[];
   points: TrendPoint[];
+  loading: boolean;
+  statusText: string;
   summary: {
     amount: number;
     ratio: number;
   } | null;
+};
+
+type HistoryApiPoint = {
+  bucketKey: string;
+  capturedAt: string;
+  value: number;
+};
+
+type HistoryApiResponse = {
+  window: TrendWindow;
+  range: TrendRange;
+  ranges: TrendRange[];
+  series: HistoryApiPoint[];
+  assets: Array<{
+    kind: PortfolioKind;
+    symbol: string;
+    resolvedSymbol: string;
+    quantity: number;
+    points: number;
+    status: "ok" | "error";
+    error: string | null;
+  }>;
+  error?: string;
 };
 
 type PrivacyCache = {
@@ -142,6 +170,16 @@ const KIND_META: Record<PortfolioKind, { label: string; single: string; icon: ty
   indices: { label: "Indices", single: "indice", icon: BarChart3 },
   crypto: { label: "Crypto", single: "crypto", icon: Bitcoin },
   stocks: { label: "Acciones", single: "accion", icon: BriefcaseBusiness },
+};
+
+const TREND_RANGES: Record<TrendWindow, TrendRange[]> = {
+  "1h": ["1d", "5d", "1mo", "3mo"],
+  "1d": ["6mo", "1y", "2y", "5y", "10y", "max"],
+};
+
+const DEFAULT_TREND_RANGE: Record<TrendWindow, TrendRange> = {
+  "1h": "5d",
+  "1d": "6mo",
 };
 
 const euro = new Intl.NumberFormat("es-ES", {
@@ -195,6 +233,40 @@ function formatDateTime(value?: string | null) {
     dateStyle: "short",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function formatTrendLabel(bucket: TrendWindow, value: string) {
+  return new Intl.DateTimeFormat(
+    "es-ES",
+    bucket === "1h"
+      ? { day: "2-digit", month: "2-digit", hour: "2-digit" }
+      : { day: "2-digit", month: "2-digit", year: "2-digit" },
+  ).format(new Date(value));
+}
+
+function formatTrendRange(range: TrendRange) {
+  switch (range) {
+    case "1d":
+      return "1d";
+    case "5d":
+      return "5d";
+    case "1mo":
+      return "1m";
+    case "3mo":
+      return "3m";
+    case "6mo":
+      return "6m";
+    case "1y":
+      return "1a";
+    case "2y":
+      return "2a";
+    case "5y":
+      return "5a";
+    case "10y":
+      return "10a";
+    default:
+      return "MAX";
+  }
 }
 
 function emptyHistory(): HistoryCache {
@@ -296,55 +368,47 @@ function resolveTrend(history: HistorySnapshot[], bucket: "hourly" | "daily", cu
   return { label: bucket === "hourly" ? "1h" : "1d", amount, ratio, capturedAt: snapshot.capturedAt };
 }
 
-function trendLabel(bucket: TrendWindow, capturedAt: string) {
-  return new Intl.DateTimeFormat(
-    "es-ES",
-    bucket === "1h"
-      ? { day: "2-digit", month: "2-digit", hour: "2-digit" }
-      : { day: "2-digit", month: "2-digit" },
-  ).format(new Date(capturedAt));
-}
-
-function buildTrendSeries(
-  history: HistorySnapshot[],
+function buildTrendDialogFromSeries(
+  history: HistoryApiPoint[],
   bucket: TrendWindow,
-  currentValue: number,
+  range: TrendRange,
   currentInvested: number,
-  referenceAt?: string | null,
+  statusText: string,
 ) {
-  const ordered = [...history].sort((left, right) => left.capturedAt.localeCompare(right.capturedAt));
-  const currentAt = referenceAt ?? new Date().toISOString();
-  const currentBucket = bucketKeyFor(new Date(currentAt), bucket === "1h" ? "hourly" : "daily");
-  const points = ordered.map((snapshot) => ({
-    label: trendLabel(bucket, snapshot.capturedAt),
-    capturedAt: snapshot.capturedAt,
-    value: snapshot.value,
-    invested: snapshot.invested,
-  }));
-
-  const currentPoint: TrendPoint = {
-    label: trendLabel(bucket, currentAt),
-    capturedAt: currentAt,
-    value: currentValue,
-    invested: currentInvested,
-  };
-
-  const lastSnapshot = ordered.at(-1);
-  if (!lastSnapshot || lastSnapshot.bucketKey !== currentBucket) {
-    points.push(currentPoint);
-  } else {
-    points[points.length - 1] = currentPoint;
-  }
+  const points = [...history]
+    .sort((left, right) => left.capturedAt.localeCompare(right.capturedAt))
+    .map((snapshot) => ({
+      label: formatTrendLabel(bucket, snapshot.capturedAt),
+      capturedAt: snapshot.capturedAt,
+      value: snapshot.value,
+      invested: currentInvested,
+    }));
 
   if (points.length < 2) {
-    return { points, summary: null };
+    return {
+      bucket,
+      range,
+      ranges: TREND_RANGES[bucket],
+      points,
+      loading: false,
+      statusText,
+      summary: null,
+    } satisfies TrendDialog;
   }
 
   const first = points[0];
   const last = points.at(-1) ?? first;
   const amount = last.value - first.value;
   const ratio = first.value > 0 ? last.value / first.value - 1 : 0;
-  return { points, summary: { amount, ratio } };
+  return {
+    bucket,
+    range,
+    ranges: TREND_RANGES[bucket],
+    points,
+    loading: false,
+    statusText,
+    summary: { amount, ratio },
+  } satisfies TrendDialog;
 }
 
 function readPrivacyCache(): PrivacyCache {
@@ -538,6 +602,30 @@ export default function App() {
     return [...new Set(assets)].join(",");
   }, [portfolios]);
 
+  const historyPositionQuery = useMemo(() => {
+    const grouped = new Map<string, { kind: PortfolioKind; symbol: string; quantity: number }>();
+    portfolios.forEach((portfolio) => {
+      portfolio.positions.forEach((position) => {
+        const normalizedSymbol = position.symbol.trim().toUpperCase();
+        if (!normalizedSymbol || position.quantity <= 0) return;
+        const key = quoteKey(portfolio.kind, normalizedSymbol);
+        const current = grouped.get(key);
+        if (current) {
+          current.quantity += position.quantity;
+          return;
+        }
+        grouped.set(key, {
+          kind: portfolio.kind,
+          symbol: normalizedSymbol,
+          quantity: position.quantity,
+        });
+      });
+    });
+    return [...grouped.values()]
+      .map((item) => `${item.kind}:${item.symbol}:${item.quantity}`)
+      .join(",");
+  }, [portfolios]);
+
   const refreshQuotes = useCallback(async () => {
     if (!assetQuery) {
       setQuotes([]);
@@ -594,6 +682,58 @@ export default function App() {
       "1d": resolveTrend(historyCache.daily, "daily", totals.value, lastRefresh),
     }),
     [historyCache.daily, historyCache.hourly, lastRefresh, totals.value],
+  );
+
+  const fetchGlobalHistory = useCallback(
+    async (bucket: TrendWindow, range = DEFAULT_TREND_RANGE[bucket], keepOpen = false) => {
+      if (!historyPositionQuery) return;
+
+      if (keepOpen) {
+        setTrendDialog((current) =>
+          current
+            ? {
+                ...current,
+                bucket,
+                range,
+                ranges: TREND_RANGES[bucket],
+                loading: true,
+                statusText: "Cargando historico global...",
+              }
+            : current,
+        );
+      } else {
+        setLoadingTrend(bucket);
+      }
+
+      try {
+        const response = await fetch(
+          `/api/history?window=${bucket}&range=${range}&positions=${encodeURIComponent(historyPositionQuery)}&t=${Date.now()}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = (await response.json()) as HistoryApiResponse;
+        const okAssets = payload.assets.filter((asset) => asset.status === "ok").length;
+        const statusText =
+          okAssets === payload.assets.length
+            ? `${payload.assets.length} activo(s) calculados con historico ${formatTrendRange(payload.range)}`
+            : `${okAssets}/${payload.assets.length} activo(s) con historico ${formatTrendRange(payload.range)}`;
+        setTrendDialog(buildTrendDialogFromSeries(payload.series, bucket, payload.range, totals.invested, statusText));
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "No se pudo cargar el historico global");
+        setTrendDialog((current) =>
+          keepOpen && current
+            ? {
+                ...current,
+                loading: false,
+                statusText: "No se pudo actualizar el historico global.",
+              }
+            : current,
+        );
+      } finally {
+        setLoadingTrend(null);
+      }
+    },
+    [historyPositionQuery, totals.invested],
   );
 
   function persist(next = portfolios, nextHistory = historyCache) {
@@ -746,13 +886,12 @@ export default function App() {
 
   function openTrendChart(bucket: TrendWindow) {
     if (loadingTrend) return;
-    setLoadingTrend(bucket);
-    window.setTimeout(() => {
-      const source = bucket === "1h" ? historyCache.hourly : historyCache.daily;
-      const result = buildTrendSeries(source, bucket, totals.value, totals.invested, lastRefresh);
-      setTrendDialog({ bucket, points: result.points, summary: result.summary });
-      setLoadingTrend(null);
-    }, 180);
+    void fetchGlobalHistory(bucket, DEFAULT_TREND_RANGE[bucket]);
+  }
+
+  function updateTrendRange(range: TrendRange) {
+    if (!trendDialog || trendDialog.loading) return;
+    void fetchGlobalHistory(trendDialog.bucket, range, true);
   }
 
   const visiblePortfolios =
@@ -828,9 +967,11 @@ export default function App() {
             <SecretValue hidden={pricesHidden}>{euro.format(totals.amount)}</SecretValue> vs aportado
           </small>
           <small className="trend-caption">
-            {trendMetrics["1h"] || trendMetrics["1d"]
-              ? "Pulsa 1h o 1d para abrir el grafico global"
-              : "Se ira llenando historico global al refrescar precios"}
+            1h {trendMetrics["1h"] ? `${trendMetrics["1h"].amount >= 0 ? "+" : ""}${percent.format(trendMetrics["1h"].ratio)}` : "pendiente"} · 1d{" "}
+            {trendMetrics["1d"] ? `${trendMetrics["1d"].amount >= 0 ? "+" : ""}${percent.format(trendMetrics["1d"].ratio)}` : "pendiente"}
+          </small>
+          <small className="trend-caption">
+            1h abre rango corto. 1d carga 6 meses globales y puedes ampliar mas.
           </small>
         </article>
         <article className="metric">
@@ -914,7 +1055,12 @@ export default function App() {
       <footer className="footer-line">Ultimo guardado: {formatDateTime(lastSavedAt)}</footer>
 
       {trendDialog && (
-        <TrendChartModal dialog={trendDialog} pricesHidden={pricesHidden} onClose={() => setTrendDialog(null)} />
+        <TrendChartModal
+          dialog={trendDialog}
+          pricesHidden={pricesHidden}
+          onRangeChange={updateTrendRange}
+          onClose={() => setTrendDialog(null)}
+        />
       )}
 
       {patternDialog && (
@@ -1112,10 +1258,12 @@ function TrendButton({ loading, label, onClick }: { loading: boolean; label: Tre
 function TrendChartModal({
   dialog,
   pricesHidden,
+  onRangeChange,
   onClose,
 }: {
   dialog: TrendDialog;
   pricesHidden: boolean;
+  onRangeChange: (range: TrendRange) => void;
   onClose: () => void;
 }) {
   const width = 720;
@@ -1124,7 +1272,9 @@ function TrendChartModal({
   const chartWidth = width - padding * 2;
   const chartHeight = height - padding * 2;
   const ticks = 4;
-  const allValues = dialog.points.flatMap((point) => [point.value, point.invested]);
+  const allValues = dialog.points.length
+    ? dialog.points.flatMap((point) => [point.value, point.invested])
+    : [0, dialog.summary?.amount ?? 0];
   const minValue = Math.min(...allValues);
   const maxValue = Math.max(...allValues);
   const range = maxValue - minValue || Math.max(maxValue, 1);
@@ -1157,11 +1307,27 @@ function TrendChartModal({
         <div className="pattern-modal-header">
           <div>
             <p className="eyebrow">Historico global</p>
-            <h2 id="trend-chart-title">Grafico {dialog.bucket}</h2>
+            <h2 id="trend-chart-title">
+              Grafico {dialog.bucket} · {formatTrendRange(dialog.range)}
+            </h2>
           </div>
           <button className="icon-button small" onClick={onClose} title="Cerrar">
             <X size={16} />
           </button>
+        </div>
+
+        <div className="trend-range-list" role="tablist" aria-label="Rango historico">
+          {dialog.ranges.map((rangeOption) => (
+            <button
+              key={`${dialog.bucket}-${rangeOption}`}
+              type="button"
+              className={dialog.range === rangeOption ? "trend-range active" : "trend-range"}
+              onClick={() => onRangeChange(rangeOption)}
+              disabled={dialog.loading}
+            >
+              {formatTrendRange(rangeOption)}
+            </button>
+          ))}
         </div>
 
         <div className="chart-summary">
@@ -1183,10 +1349,17 @@ function TrendChartModal({
           </div>
         </div>
 
-        {dialog.points.length < 2 ? (
+        <p className="chart-status">{dialog.loading ? "Cargando historico global..." : dialog.statusText}</p>
+
+        {dialog.loading ? (
+          <div className="chart-empty">
+            <strong>Cargando...</strong>
+            <span>Estamos recalculando la serie global de la cartera.</span>
+          </div>
+        ) : dialog.points.length < 2 ? (
           <div className="chart-empty">
             <strong>No hay suficientes datos todavia.</strong>
-            <span>La app ira calculando el historico global al refrescar precios.</span>
+            <span>Prueba con otro rango o refresca para seguir guardando historial local.</span>
           </div>
         ) : (
           <div className="chart-shell">

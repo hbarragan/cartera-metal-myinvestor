@@ -773,6 +773,31 @@ td span {
   margin: 16px 0;
 }
 
+.trend-range-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.trend-range {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fbfcfb;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.trend-range.active {
+  border-color: var(--accent);
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--accent-dark);
+}
+
 .chart-summary-item {
   padding: 12px 14px;
   border: 1px solid var(--line);
@@ -808,6 +833,13 @@ td span {
 .chart-empty strong {
   color: var(--ink);
   font-size: 1.12rem;
+}
+
+.chart-status {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
 .chart-shell {
@@ -1089,6 +1121,16 @@ td span {
 
   .chart-summary {
     grid-template-columns: 1fr;
+  }
+
+  .trend-range-list {
+    gap: 6px;
+  }
+
+  .trend-range {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 0.78rem;
   }
 
   .chart-summary-item strong {
