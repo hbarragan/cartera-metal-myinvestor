@@ -144,8 +144,12 @@ function safeNumber(value: string | number) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function compactNumber(value: number) {
-  return Number.isFinite(value) ? value.toFixed(8).replace(/\.?0+$/, "") : "0";
+function compactNumber(value: number, maxDecimals = 12) {
+  return Number.isFinite(value) ? value.toFixed(maxDecimals).replace(/\.?0+$/, "") : "0";
+}
+
+function isDecimalInput(value: string) {
+  return /^\d*([,.]\d*)?$/.test(value);
 }
 
 function formatDateTime(value?: string | null) {
@@ -626,14 +630,13 @@ function PortfolioCard({
       </div>
 
       <div className="portfolio-summary">
-        <label className="money-input invested-input">
-          <span>EUR</span>
-          <input
-            value={compactNumber(portfolio.investedEUR)}
-            inputMode="decimal"
-            onChange={(event) => onChange({ ...portfolio, investedEUR: safeNumber(event.target.value) })}
-          />
-        </label>
+        <DecimalInput
+          className="money-input invested-input"
+          prefix="EUR"
+          value={portfolio.investedEUR}
+          maxDecimals={2}
+          onValueChange={(investedEUR) => onChange({ ...portfolio, investedEUR })}
+        />
         <div>
           <span>Valor</span>
           <strong>{euro.format(value)}</strong>
@@ -689,21 +692,20 @@ function PortfolioCard({
                     <span className="mono">{position.symbol}</span>
                   </td>
                   <td>
-                    <label className="money-input unit-input">
-                      <span>{portfolio.kind === "indices" ? "PART." : "UD."}</span>
-                      <input
-                        value={compactNumber(position.quantity)}
-                        inputMode="decimal"
-                        onChange={(event) =>
-                          onChange({
-                            ...portfolio,
-                            positions: portfolio.positions.map((item) =>
-                              item.id === position.id ? { ...item, quantity: safeNumber(event.target.value) } : item,
-                            ),
-                          })
-                        }
-                      />
-                    </label>
+                    <DecimalInput
+                      className="money-input unit-input"
+                      prefix={portfolio.kind === "indices" ? "PART." : "UD."}
+                      value={position.quantity}
+                      maxDecimals={12}
+                      onValueChange={(quantity) =>
+                        onChange({
+                          ...portfolio,
+                          positions: portfolio.positions.map((item) =>
+                            item.id === position.id ? { ...item, quantity } : item,
+                          ),
+                        })
+                      }
+                    />
                   </td>
                   <td>{quote?.priceEUR ? priceFormat.format(quote.priceEUR) : "Sin dato"}</td>
                   <td>{euro.format(rowValue)}</td>
@@ -733,4 +735,46 @@ function optionsFor(kind: PortfolioKind) {
 
 function defaultOptionFor(kind: PortfolioKind) {
   return optionsFor(kind)[0]?.symbol ?? "";
+}
+
+function DecimalInput({
+  value,
+  onValueChange,
+  prefix,
+  className,
+  maxDecimals = 12,
+}: {
+  value: number;
+  onValueChange: (value: number) => void;
+  prefix: string;
+  className: string;
+  maxDecimals?: number;
+}) {
+  const [text, setText] = useState(compactNumber(value, maxDecimals));
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) setText(compactNumber(value, maxDecimals));
+  }, [isFocused, maxDecimals, value]);
+
+  return (
+    <label className={className}>
+      <span>{prefix}</span>
+      <input
+        value={text}
+        inputMode="decimal"
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => {
+          setIsFocused(false);
+          setText(compactNumber(safeNumber(text), maxDecimals));
+        }}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (!isDecimalInput(next)) return;
+          setText(next);
+          onValueChange(safeNumber(next));
+        }}
+      />
+    </label>
+  );
 }
