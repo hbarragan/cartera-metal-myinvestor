@@ -757,7 +757,7 @@ function PortfolioCard({
         {pricesHidden ? (
           <div className="masked-input">
             <span>EUR</span>
-            <strong>••••••</strong>
+            <strong>******</strong>
           </div>
         ) : (
           <DecimalInput
@@ -848,7 +848,7 @@ function PortfolioCard({
 }
 
 function SecretValue({ hidden, children }: { hidden: boolean; children: React.ReactNode }) {
-  return <span className={hidden ? "masked-value" : undefined}>{hidden ? "••••••" : children}</span>;
+  return <span className={hidden ? "masked-value" : undefined}>{hidden ? "******" : children}</span>;
 }
 
 function PatternModal({
