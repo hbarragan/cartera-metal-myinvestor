@@ -374,6 +374,40 @@ td span {
   outline: none;
 }
 
+.masked-value {
+  display: inline-block;
+  min-width: 5.4ch;
+  color: currentColor;
+  letter-spacing: 0.08em;
+}
+
+.masked-input {
+  display: grid;
+  grid-template-columns: 42px minmax(120px, 1fr);
+  align-items: center;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf8;
+}
+
+.masked-input span {
+  display: grid;
+  place-items: center;
+  height: 38px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.masked-input strong {
+  padding: 0 10px;
+  color: var(--ink);
+  letter-spacing: 0.08em;
+}
+
 .history-list,
 .source-list {
   display: grid;
@@ -664,6 +698,100 @@ td span {
   color: var(--muted);
   font-size: 0.88rem;
   text-align: right;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(17, 32, 28, 0.48);
+  backdrop-filter: blur(8px);
+}
+
+.pattern-modal {
+  width: min(420px, 100%);
+  padding: 18px;
+  border: 1px solid rgba(217, 223, 219, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 90px rgba(17, 32, 28, 0.28);
+}
+
+.pattern-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.pattern-helper,
+.pattern-error {
+  margin: 14px 0;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.pattern-error {
+  color: var(--negative);
+}
+
+.pattern-board {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+  width: min(300px, 100%);
+  aspect-ratio: 1;
+  margin: 18px auto;
+  padding: 28px;
+  touch-action: none;
+  user-select: none;
+}
+
+.pattern-lines {
+  position: absolute;
+  inset: 28px;
+  pointer-events: none;
+}
+
+.pattern-lines polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 8;
+  opacity: 0.72;
+}
+
+.pattern-dot {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: #f8faf8;
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 850;
+  box-shadow: inset 0 0 0 9px white;
+}
+
+.pattern-dot.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 7px #d9f5ef;
+}
+
+.pattern-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 @keyframes spin {

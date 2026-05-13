@@ -6,6 +6,8 @@ import {
   Check,
   CircleDollarSign,
   Download,
+  Eye,
+  EyeOff,
   LayoutDashboard,
   LineChart,
   Plus,
@@ -65,6 +67,17 @@ type AppCache = {
   savedAt: string;
 };
 
+type PrivacyCache = {
+  hidden: boolean;
+  pattern: string | null;
+  updatedAt: string;
+};
+
+type PatternDialog = {
+  mode: "setup" | "unlock";
+  reason: "hide" | "show" | "export";
+};
+
 type LegacyHolding = {
   isin: string;
   shares?: number;
@@ -73,6 +86,8 @@ type LegacyHolding = {
 };
 
 const APP_CACHE_KEY = "stock-hbarrag:v1";
+const PRIVACY_CACHE_KEY = "stock-hbarrag:privacy:v1";
+const AUTO_HIDE_MS = 60_000;
 const LEGACY_KEYS = [
   "cartera-metal-myinvestor:v4",
   "cartera-metal-myinvestor:v3",
@@ -147,6 +162,22 @@ function formatDateTime(value?: string | null) {
     dateStyle: "short",
     timeStyle: "medium",
   }).format(new Date(value));
+}
+
+function readPrivacyCache(): PrivacyCache {
+  try {
+    const cached = localStorage.getItem(PRIVACY_CACHE_KEY);
+    if (!cached) return { hidden: false, pattern: null, updatedAt: new Date().toISOString() };
+    const parsed = JSON.parse(cached) as Partial<PrivacyCache>;
+    return {
+      hidden: Boolean(parsed.hidden),
+      pattern: typeof parsed.pattern === "string" && parsed.pattern ? parsed.pattern : null,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+    };
+  } catch {
+    localStorage.removeItem(PRIVACY_CACHE_KEY);
+    return { hidden: false, pattern: null, updatedAt: new Date().toISOString() };
+  }
 }
 
 function quoteKey(kind: PortfolioKind, symbol: string) {
@@ -260,9 +291,17 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pricesHidden, setPricesHidden] = useState(false);
+  const [pattern, setPattern] = useState<string | null>(null);
+  const [patternDialog, setPatternDialog] = useState<PatternDialog | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const idleTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const privacy = readPrivacyCache();
+    setPricesHidden(privacy.hidden);
+    setPattern(privacy.pattern);
+
     const cached = localStorage.getItem(APP_CACHE_KEY);
     if (cached) {
       try {
@@ -278,6 +317,17 @@ export default function App() {
     const migratedMetal = metalPortfolioFromLegacy();
     setPortfolios(migratedMetal ? [migratedMetal] : []);
   }, []);
+
+  const persistPrivacy = useCallback((hidden: boolean, nextPattern = pattern) => {
+    const payload: PrivacyCache = {
+      hidden,
+      pattern: nextPattern,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(PRIVACY_CACHE_KEY, JSON.stringify(payload));
+    setPricesHidden(hidden);
+    setPattern(nextPattern);
+  }, [pattern]);
 
   const quoteMap = useMemo(
     () => new Map(quotes.map((quote) => [quoteKey(quote.kind, quote.symbol), quote])),
@@ -358,6 +408,14 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
+  function requestExportPortfolios() {
+    if (pattern) {
+      setPatternDialog({ mode: "unlock", reason: "export" });
+      return;
+    }
+    exportPortfolios();
+  }
+
   async function importPortfolios(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -418,6 +476,57 @@ export default function App() {
     }));
   }
 
+  const hidePrices = useCallback(() => {
+    if (!pattern) return;
+    persistPrivacy(true, pattern);
+  }, [pattern, persistPrivacy]);
+
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+    if (!pattern || pricesHidden) return;
+    idleTimerRef.current = window.setTimeout(hidePrices, AUTO_HIDE_MS);
+  }, [hidePrices, pattern, pricesHidden]);
+
+  useEffect(() => {
+    resetIdleTimer();
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "pointerdown"];
+    events.forEach((eventName) => window.addEventListener(eventName, resetIdleTimer, { passive: true }));
+    return () => {
+      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current);
+      events.forEach((eventName) => window.removeEventListener(eventName, resetIdleTimer));
+    };
+  }, [resetIdleTimer]);
+
+  function togglePricePrivacy() {
+    if (pricesHidden) {
+      setPatternDialog({ mode: pattern ? "unlock" : "setup", reason: "show" });
+      return;
+    }
+
+    if (!pattern) {
+      setPatternDialog({ mode: "setup", reason: "hide" });
+      return;
+    }
+
+    persistPrivacy(true, pattern);
+  }
+
+  function createPattern(nextPattern: string) {
+    persistPrivacy(true, nextPattern);
+    setPatternDialog(null);
+  }
+
+  function unlockWithPattern() {
+    if (!patternDialog) return;
+    if (patternDialog.reason === "export") {
+      setPatternDialog(null);
+      exportPortfolios();
+      return;
+    }
+    persistPrivacy(false, pattern);
+    setPatternDialog(null);
+  }
+
   const visiblePortfolios =
     activeView === "dashboard" ? portfolios : portfolios.filter((portfolio) => portfolio.kind === activeView);
 
@@ -429,10 +538,13 @@ export default function App() {
           <h1>Dashboard de carteras</h1>
         </div>
         <div className="actions">
+          <button className="icon-button" onClick={togglePricePrivacy} title={pricesHidden ? "Mostrar importes" : "Ocultar importes"}>
+            {pricesHidden ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
           <button className="icon-button" onClick={refreshQuotes} title="Refrescar precios">
             <RefreshCcw size={18} className={isLoading ? "spin" : ""} />
           </button>
-          <button className="secondary-button" onClick={exportPortfolios}>
+          <button className="secondary-button" onClick={requestExportPortfolios}>
             <Download size={17} />
             Exportar
           </button>
@@ -474,16 +586,20 @@ export default function App() {
         <article className="metric primary-metric">
           <WalletCards size={20} />
           <span>Valor global</span>
-          <strong>{euro.format(totals.value)}</strong>
+          <strong>
+            <SecretValue hidden={pricesHidden}>{euro.format(totals.value)}</SecretValue>
+          </strong>
           <small className={totals.amount >= 0 ? "positive" : "negative"}>
             {totals.amount >= 0 ? "+" : ""}
-            {euro.format(totals.amount)} vs aportado
+            <SecretValue hidden={pricesHidden}>{euro.format(totals.amount)}</SecretValue> vs aportado
           </small>
         </article>
         <article className="metric">
           <CircleDollarSign size={20} />
           <span>Aportado total</span>
-          <strong>{euro.format(totals.invested)}</strong>
+          <strong>
+            <SecretValue hidden={pricesHidden}>{euro.format(totals.invested)}</SecretValue>
+          </strong>
           <small>Editable en cada cartera</small>
         </article>
         <article className="metric">
@@ -507,7 +623,7 @@ export default function App() {
 
       {error && <section className="status-line error-line">{error}</section>}
 
-      {activeView === "dashboard" && <DashboardBreakdown rows={totals.byKind} />}
+      {activeView === "dashboard" && <DashboardBreakdown rows={totals.byKind} pricesHidden={pricesHidden} />}
 
       <section className="workspace-grid wide">
         <div className="portfolio-panel">
@@ -548,6 +664,7 @@ export default function App() {
                   onRemove={() => removePortfolio(portfolio.id)}
                   onAddPosition={(symbol) => addPosition(portfolio.id, symbol)}
                   onRemovePosition={(positionId) => removePosition(portfolio.id, positionId)}
+                  pricesHidden={pricesHidden}
                 />
               ))
             )}
@@ -556,11 +673,27 @@ export default function App() {
       </section>
 
       <footer className="footer-line">Ultimo guardado: {formatDateTime(lastSavedAt)}</footer>
+
+      {patternDialog && (
+        <PatternModal
+          dialog={patternDialog}
+          expectedPattern={pattern}
+          onCreate={createPattern}
+          onUnlock={unlockWithPattern}
+          onClose={() => setPatternDialog(null)}
+        />
+      )}
     </main>
   );
 }
 
-function DashboardBreakdown({ rows }: { rows: Array<{ kind: PortfolioKind; value: number; invested: number; amount: number; ratio: number; count: number }> }) {
+function DashboardBreakdown({
+  rows,
+  pricesHidden,
+}: {
+  rows: Array<{ kind: PortfolioKind; value: number; invested: number; amount: number; ratio: number; count: number }>;
+  pricesHidden: boolean;
+}) {
   return (
     <section className="breakdown-grid">
       {rows.map((row) => {
@@ -569,10 +702,12 @@ function DashboardBreakdown({ rows }: { rows: Array<{ kind: PortfolioKind; value
           <article className="breakdown-card" key={row.kind}>
             <Icon size={19} />
             <span>{KIND_META[row.kind].label}</span>
-            <strong>{euro.format(row.value)}</strong>
+            <strong>
+              <SecretValue hidden={pricesHidden}>{euro.format(row.value)}</SecretValue>
+            </strong>
             <small className={row.amount >= 0 ? "positive" : "negative"}>
               {row.amount >= 0 ? "+" : ""}
-              {percent.format(row.ratio)} · {euro.format(row.amount)}
+              {percent.format(row.ratio)} · <SecretValue hidden={pricesHidden}>{euro.format(row.amount)}</SecretValue>
             </small>
             <em>{row.count} cartera(s)</em>
           </article>
@@ -589,6 +724,7 @@ function PortfolioCard({
   onRemove,
   onAddPosition,
   onRemovePosition,
+  pricesHidden,
 }: {
   portfolio: Portfolio;
   quotes: Map<string, MarketQuote>;
@@ -596,6 +732,7 @@ function PortfolioCard({
   onRemove: () => void;
   onAddPosition: (symbol: string) => void;
   onRemovePosition: (positionId: string) => void;
+  pricesHidden: boolean;
 }) {
   const value = portfolioValue(portfolio, quotes);
   const gain = gainFor(value, portfolio.investedEUR);
@@ -617,16 +754,25 @@ function PortfolioCard({
       </div>
 
       <div className="portfolio-summary">
-        <DecimalInput
-          className="money-input invested-input"
-          prefix="EUR"
-          value={portfolio.investedEUR}
-          maxDecimals={2}
-          onValueChange={(investedEUR) => onChange({ ...portfolio, investedEUR })}
-        />
+        {pricesHidden ? (
+          <div className="masked-input">
+            <span>EUR</span>
+            <strong>••••••</strong>
+          </div>
+        ) : (
+          <DecimalInput
+            className="money-input invested-input"
+            prefix="EUR"
+            value={portfolio.investedEUR}
+            maxDecimals={2}
+            onValueChange={(investedEUR) => onChange({ ...portfolio, investedEUR })}
+          />
+        )}
         <div>
           <span>Valor</span>
-          <strong>{euro.format(value)}</strong>
+          <strong>
+            <SecretValue hidden={pricesHidden}>{euro.format(value)}</SecretValue>
+          </strong>
         </div>
         <div>
           <span>Ganancia</span>
@@ -677,8 +823,12 @@ function PortfolioCard({
                       }
                     />
                   </td>
-                  <td>{quote?.priceEUR ? priceFormat.format(quote.priceEUR) : "Sin dato"}</td>
-                  <td>{euro.format(rowValue)}</td>
+                  <td>
+                    <SecretValue hidden={pricesHidden}>{quote?.priceEUR ? priceFormat.format(quote.priceEUR) : "Sin dato"}</SecretValue>
+                  </td>
+                  <td>
+                    <SecretValue hidden={pricesHidden}>{euro.format(rowValue)}</SecretValue>
+                  </td>
                   <td className={(quote?.changePercent ?? 0) >= 0 ? "positive" : "negative"}>
                     {quote?.changePercent == null ? "Pendiente" : `${quote.changePercent >= 0 ? "+" : ""}${quote.changePercent.toFixed(2)} %`}
                   </td>
@@ -694,6 +844,168 @@ function PortfolioCard({
         </table>
       </div>
     </article>
+  );
+}
+
+function SecretValue({ hidden, children }: { hidden: boolean; children: React.ReactNode }) {
+  return <span className={hidden ? "masked-value" : undefined}>{hidden ? "••••••" : children}</span>;
+}
+
+function PatternModal({
+  dialog,
+  expectedPattern,
+  onCreate,
+  onUnlock,
+  onClose,
+}: {
+  dialog: PatternDialog;
+  expectedPattern: string | null;
+  onCreate: (pattern: string) => void;
+  onUnlock: () => void;
+  onClose: () => void;
+}) {
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const selectedRef = useRef<number[]>([]);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const title =
+    dialog.mode === "setup"
+      ? "Crear patron"
+      : dialog.reason === "export"
+        ? "Patron para exportar"
+        : "Patron para mostrar";
+  const helper =
+    dialog.mode === "setup"
+      ? "Dibuja al menos 4 puntos. Se guardara solo en este navegador."
+      : "Dibuja tu patron para continuar.";
+
+  function updateSelected(next: number[]) {
+    selectedRef.current = next;
+    setSelected(next);
+  }
+
+  function dotFromPointer(event: React.PointerEvent<HTMLDivElement>) {
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const dot = element?.closest<HTMLButtonElement>("[data-pattern-dot]");
+    if (!dot || !boardRef.current?.contains(dot)) return null;
+    const value = Number(dot.dataset.patternDot);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function addDot(dot: number) {
+    const current = selectedRef.current;
+    if (current.includes(dot)) return;
+    updateSelected([...current, dot]);
+  }
+
+  function startPattern(event: React.PointerEvent<HTMLDivElement>) {
+    const dot = dotFromPointer(event);
+    if (!dot) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setMessage(null);
+    setIsDrawing(true);
+    updateSelected([dot]);
+  }
+
+  function movePattern(event: React.PointerEvent<HTMLDivElement>) {
+    if (!isDrawing) return;
+    const dot = dotFromPointer(event);
+    if (dot) addDot(dot);
+  }
+
+  function finishPattern(event: React.PointerEvent<HTMLDivElement>) {
+    if (!isDrawing) return;
+    event.preventDefault();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsDrawing(false);
+
+    const dots = selectedRef.current;
+    const nextPattern = dots.join("-");
+    if (dialog.mode === "setup") {
+      if (dots.length < 4) {
+        setMessage("El patron debe tener al menos 4 puntos.");
+        updateSelected([]);
+        return;
+      }
+      onCreate(nextPattern);
+      return;
+    }
+
+    if (expectedPattern && nextPattern === expectedPattern) {
+      onUnlock();
+      return;
+    }
+
+    setMessage("Patron incorrecto.");
+    updateSelected([]);
+  }
+
+  function clearPattern() {
+    setMessage(null);
+    updateSelected([]);
+  }
+
+  const polyline = selected
+    .map((dot) => {
+      const index = dot - 1;
+      const column = index % 3;
+      const row = Math.floor(index / 3);
+      return `${column * 100 + 50},${row * 100 + 50}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pattern-title">
+      <div className="pattern-modal">
+        <div className="pattern-modal-header">
+          <div>
+            <p className="eyebrow">Privacidad</p>
+            <h2 id="pattern-title">{title}</h2>
+          </div>
+          <button className="icon-button small" onClick={onClose} title="Cerrar">
+            ×
+          </button>
+        </div>
+        <p className="pattern-helper">{helper}</p>
+        <div
+          ref={boardRef}
+          className="pattern-board"
+          onPointerDown={startPattern}
+          onPointerMove={movePattern}
+          onPointerUp={finishPattern}
+          onPointerCancel={finishPattern}
+        >
+          <svg className="pattern-lines" viewBox="0 0 300 300" aria-hidden="true">
+            {selected.length > 1 && <polyline points={polyline} />}
+          </svg>
+          {Array.from({ length: 9 }, (_, index) => {
+            const dot = index + 1;
+            const order = selected.indexOf(dot);
+            return (
+              <button
+                key={dot}
+                type="button"
+                data-pattern-dot={dot}
+                className={order >= 0 ? "pattern-dot active" : "pattern-dot"}
+                aria-label={`Punto ${dot}`}
+              >
+                {order >= 0 ? order + 1 : ""}
+              </button>
+            );
+          })}
+        </div>
+        {message && <p className="pattern-error">{message}</p>}
+        <div className="pattern-actions">
+          <button className="secondary-button" onClick={clearPattern}>Borrar</button>
+          <button className="secondary-button" onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
