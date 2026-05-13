@@ -582,6 +582,69 @@ td span {
   outline: none;
 }
 
+.asset-search {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.asset-search-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+}
+
+.asset-search-row input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf8;
+  padding: 0 12px;
+  color: var(--ink);
+  outline: none;
+}
+
+.search-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 8px;
+}
+
+.search-results button {
+  display: grid;
+  gap: 4px;
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfb;
+  color: var(--ink);
+  text-align: left;
+}
+
+.search-results button:hover {
+  border-color: var(--accent);
+}
+
+.search-results strong {
+  font-size: 0.95rem;
+}
+
+.search-results span,
+.search-results em,
+.search-hint,
+.search-error {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: normal;
+}
+
+.search-error {
+  color: var(--negative);
+  font-weight: 700;
+}
+
 .empty-state {
   display: grid;
   gap: 6px;
@@ -623,7 +686,8 @@ td span {
   }
 
   .portfolio-summary,
-  .add-row {
+  .add-row,
+  .asset-search-row {
     grid-template-columns: 1fr;
   }
 }

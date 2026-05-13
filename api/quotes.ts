@@ -214,7 +214,7 @@ async function eurRateFor(currency: string) {
   return rate;
 }
 
-async function quoteYahoo(kind: Exclude<AssetKind, "indices">, symbol: string): Promise<MarketQuote> {
+async function quoteYahoo(kind: AssetKind, symbol: string): Promise<MarketQuote> {
   const normalized = symbol.trim().toUpperCase();
   const result = await yahooChart(normalized);
   const meta = result.meta ?? {};
@@ -244,7 +244,10 @@ async function quoteYahoo(kind: Exclude<AssetKind, "indices">, symbol: string): 
 
 async function quoteFor(kind: AssetKind, symbol: string): Promise<MarketQuote> {
   try {
-    if (kind === "indices") return await quoteIndex(symbol);
+    if (kind === "indices") {
+      const fund = INDEX_FUNDS.find((item) => item.symbol === symbol);
+      return fund ? await quoteIndex(symbol) : await quoteYahoo(kind, symbol);
+    }
     return await quoteYahoo(kind, symbol);
   } catch (error) {
     return {

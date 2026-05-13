@@ -51,6 +51,15 @@ type MarketQuote = {
   error?: string;
 };
 
+type AssetSearchResult = {
+  kind: PortfolioKind;
+  symbol: string;
+  name: string;
+  exchange?: string;
+  type?: string;
+  source: string;
+};
+
 type AppCache = {
   portfolios: Portfolio[];
   savedAt: string;
@@ -79,26 +88,6 @@ const INDEX_OPTIONS = [
   { symbol: "IE00B1G3DH73", label: "Vanguard US Hedged" },
   { symbol: "IE00BYX5MD61", label: "Fidelity Europe" },
   { symbol: "IE00BDZVHT63", label: "Fidelity Pacific ex-Japan" },
-];
-
-const CRYPTO_OPTIONS = [
-  { symbol: "BTC-EUR", label: "Bitcoin" },
-  { symbol: "ETH-EUR", label: "Ethereum" },
-  { symbol: "SOL-EUR", label: "Solana" },
-  { symbol: "BNB-EUR", label: "BNB" },
-  { symbol: "XRP-EUR", label: "XRP" },
-  { symbol: "ADA-EUR", label: "Cardano" },
-];
-
-const STOCK_OPTIONS = [
-  { symbol: "AAPL", label: "Apple" },
-  { symbol: "MSFT", label: "Microsoft" },
-  { symbol: "NVDA", label: "NVIDIA" },
-  { symbol: "GOOGL", label: "Alphabet" },
-  { symbol: "AMZN", label: "Amazon" },
-  { symbol: "TSLA", label: "Tesla" },
-  { symbol: "IBE.MC", label: "Iberdrola" },
-  { symbol: "SAN.MC", label: "Santander" },
 ];
 
 const KIND_META: Record<PortfolioKind, { label: string; single: string; icon: typeof BarChart3 }> = {
@@ -608,10 +597,8 @@ function PortfolioCard({
   onAddPosition: (symbol: string) => void;
   onRemovePosition: (positionId: string) => void;
 }) {
-  const [assetToAdd, setAssetToAdd] = useState(defaultOptionFor(portfolio.kind));
   const value = portfolioValue(portfolio, quotes);
   const gain = gainFor(value, portfolio.investedEUR);
-  const options = optionsFor(portfolio.kind);
 
   return (
     <article className="portfolio-card">
@@ -650,24 +637,7 @@ function PortfolioCard({
         </div>
       </div>
 
-      <div className="add-row">
-        <select value={assetToAdd} onChange={(event) => setAssetToAdd(event.target.value)}>
-          {options.map((asset) => (
-            <option value={asset.symbol} key={asset.symbol}>
-              {asset.label} · {asset.symbol}
-            </option>
-          ))}
-        </select>
-        <input
-          value={assetToAdd}
-          onChange={(event) => setAssetToAdd(event.target.value.toUpperCase())}
-          placeholder={portfolio.kind === "stocks" ? "AAPL, IBE.MC..." : "BTC-EUR..."}
-        />
-        <button className="secondary-button" onClick={() => onAddPosition(assetToAdd)}>
-          <Plus size={16} />
-          Anadir activo
-        </button>
-      </div>
+      <AssetSearch kind={portfolio.kind} onPick={onAddPosition} />
 
       <div className="table-shell compact-table">
         <table>
@@ -727,14 +697,87 @@ function PortfolioCard({
   );
 }
 
-function optionsFor(kind: PortfolioKind) {
-  if (kind === "indices") return INDEX_OPTIONS;
-  if (kind === "crypto") return CRYPTO_OPTIONS;
-  return STOCK_OPTIONS;
-}
+function AssetSearch({ kind, onPick }: { kind: PortfolioKind; onPick: (symbol: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<AssetSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-function defaultOptionFor(kind: PortfolioKind) {
-  return optionsFor(kind)[0]?.symbol ?? "";
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 2 && kind !== "indices") {
+      setResults([]);
+      setSearchError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsSearching(true);
+      setSearchError(null);
+      try {
+        const response = await fetch(`/api/search?kind=${kind}&q=${encodeURIComponent(trimmed)}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = (await response.json()) as { results: AssetSearchResult[]; error?: string };
+        setResults(payload.results ?? []);
+        if (payload.error) setSearchError(payload.error);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setSearchError(error instanceof Error ? error.message : "No se pudo buscar");
+        setResults([]);
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [kind, query]);
+
+  function pick(symbol: string) {
+    onPick(symbol);
+    setQuery(symbol);
+  }
+
+  return (
+    <div className="asset-search">
+      <div className="asset-search-row">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={
+            kind === "indices"
+              ? "Buscar indice, ETF, fondo o ISIN..."
+              : kind === "crypto"
+                ? "Buscar crypto: bitcoin, BTC-EUR..."
+                : "Buscar accion: Apple, AAPL, IBE.MC..."
+          }
+        />
+        <button className="secondary-button" onClick={() => pick(query.trim().toUpperCase())}>
+          <Plus size={16} />
+          Anadir ticker
+        </button>
+      </div>
+      <div className="search-results">
+        {isSearching && <span className="search-hint">Buscando...</span>}
+        {searchError && <span className="search-error">{searchError}</span>}
+        {!isSearching &&
+          results.map((result) => (
+            <button key={`${result.kind}:${result.symbol}`} onClick={() => pick(result.symbol)}>
+              <strong>{result.symbol}</strong>
+              <span>{result.name}</span>
+              <em>
+                {[result.type, result.exchange || result.source].filter(Boolean).join(" · ")}
+              </em>
+            </button>
+          ))}
+      </div>
+    </div>
+  );
 }
 
 function DecimalInput({
