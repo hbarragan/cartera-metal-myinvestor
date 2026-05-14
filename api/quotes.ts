@@ -8,7 +8,7 @@ import {
   numberFromText,
   requestHeaders,
   yahooChart,
-} from "./lib/market";
+} from "./lib/market.js";
 
 type MarketQuote = {
   id: string;

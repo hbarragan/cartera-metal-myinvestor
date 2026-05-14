@@ -1,4 +1,4 @@
-import { INDEX_FUNDS, normalizeAssetKind, requestHeaders, type AssetKind } from "./lib/market";
+import { INDEX_FUNDS, normalizeAssetKind, requestHeaders, type AssetKind } from "./lib/market.js";
 
 type SearchResult = {
   kind: AssetKind;
