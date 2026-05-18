@@ -47,6 +47,24 @@ const KIND_LABELS: Record<PortfolioKind, string> = {
   stocks: "Acciones",
 };
 const REPORT_COOKIE_KEY = "stock_hbarrag_report";
+const ALLOWED_ORIGINS = new Set([
+  "https://family-hub-black-five.vercel.app",
+  "https://family-hub-hbarragans-projects.vercel.app",
+  "https://family-hub-hbarragan-hbarragans-projects.vercel.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+
+function setCorsHeaders(request: any, response: any) {
+  const origin = request.headers?.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Access-Control-Allow-Credentials", "true");
+    response.setHeader("Vary", "Origin");
+  }
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
 
 function safeNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -219,6 +237,13 @@ function positionValue(position: NormalizedPosition, portfolio: NormalizedPortfo
 }
 
 export default async function handler(request: any, response: any) {
+  setCorsHeaders(request, response);
+
+  if (request.method === "OPTIONS") {
+    response.status(204).end();
+    return;
+  }
+
   try {
     if (!["GET", "POST", "PUT"].includes(request.method ?? "GET")) {
       response.setHeader("Allow", "GET, POST, PUT");

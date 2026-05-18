@@ -437,7 +437,7 @@ function syncReportCookie(portfolios: Portfolio[]) {
     console.warn("La cartera es demasiado grande para sincronizarla con /api/report mediante cookie.");
     return;
   }
-  document.cookie = `${REPORT_COOKIE_KEY}=${payload}; Max-Age=31536000; Path=/; SameSite=Lax`;
+  document.cookie = `${REPORT_COOKIE_KEY}=${payload}; Max-Age=31536000; Path=/; SameSite=None; Secure`;
 }
 
 function quoteKey(kind: PortfolioKind, symbol: string) {
