@@ -19,6 +19,9 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import packageJson from "../package.json";
+
+const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? packageJson.version;
 
 type PortfolioKind = "indices" | "crypto" | "stocks";
 
@@ -1052,7 +1055,10 @@ export default function App() {
         </div>
       </section>
 
-      <footer className="footer-line">Ultimo guardado: {formatDateTime(lastSavedAt)}</footer>
+      <footer className="footer-line">
+        <span>Ultimo guardado: {formatDateTime(lastSavedAt)}</span>
+        <span>Version {APP_VERSION}</span>
+      </footer>
 
       {trendDialog && (
         <TrendChartModal

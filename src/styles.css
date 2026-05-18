@@ -750,6 +750,10 @@ td span {
 }
 
 .footer-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 18px;
   margin-top: 14px;
   color: var(--muted);
   font-size: 0.88rem;
