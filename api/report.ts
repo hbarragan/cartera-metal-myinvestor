@@ -46,6 +46,7 @@ const KIND_LABELS: Record<PortfolioKind, string> = {
   crypto: "Crypto",
   stocks: "Acciones",
 };
+const REPORT_COOKIE_KEY = "stock_hbarrag_report";
 
 function safeNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -157,6 +158,28 @@ function parseAssetsParam(value: string | null): NormalizedPortfolio[] {
   }));
 }
 
+function parseCookies(header: string | undefined) {
+  return Object.fromEntries(
+    (header ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        if (index === -1) return [part, ""];
+        return [part.slice(0, index), part.slice(index + 1)];
+      }),
+  );
+}
+
+function parseCookiePortfolios(request: any): NormalizedPortfolio[] {
+  const cookies = parseCookies(request.headers?.cookie);
+  const raw = cookies[REPORT_COOKIE_KEY];
+  if (!raw) return [];
+  const payload = JSON.parse(decodeURIComponent(raw));
+  return normalizePortfolios(Array.isArray(payload) ? payload : payload?.portfolios);
+}
+
 async function readBody(request: any) {
   if (request.body && typeof request.body === "object") return request.body;
   if (typeof request.body === "string") return JSON.parse(request.body || "{}");
@@ -184,7 +207,10 @@ async function portfoliosFromRequest(request: any) {
     return normalizePortfolios(JSON.parse(portfoliosParam));
   }
 
-  return parseAssetsParam(url.searchParams.get("assets"));
+  const assetsParam = url.searchParams.get("assets");
+  if (assetsParam) return parseAssetsParam(assetsParam);
+
+  return parseCookiePortfolios(request);
 }
 
 function positionValue(position: NormalizedPosition, portfolio: NormalizedPortfolio, quotes: Map<string, MarketQuote>) {

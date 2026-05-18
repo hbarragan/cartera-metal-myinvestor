@@ -151,6 +151,7 @@ type LegacyHolding = {
 const APP_CACHE_KEY = "stock-hbarrag:v1";
 const HISTORY_CACHE_KEY = "stock-hbarrag:history:v1";
 const PRIVACY_CACHE_KEY = "stock-hbarrag:privacy:v1";
+const REPORT_COOKIE_KEY = "stock_hbarrag_report";
 const AUTO_HIDE_MS = 60_000;
 const LEGACY_KEYS = [
   "cartera-metal-myinvestor:v4",
@@ -430,6 +431,15 @@ function readPrivacyCache(): PrivacyCache {
   }
 }
 
+function syncReportCookie(portfolios: Portfolio[]) {
+  const payload = encodeURIComponent(JSON.stringify({ portfolios }));
+  if (payload.length > 3800) {
+    console.warn("La cartera es demasiado grande para sincronizarla con /api/report mediante cookie.");
+    return;
+  }
+  document.cookie = `${REPORT_COOKIE_KEY}=${payload}; Max-Age=31536000; Path=/; SameSite=Lax`;
+}
+
 function quoteKey(kind: PortfolioKind, symbol: string) {
   return `${kind}:${symbol.toUpperCase()}`;
 }
@@ -561,12 +571,14 @@ export default function App() {
     if (cached) {
       try {
         const parsed = JSON.parse(cached) as AppCache;
-        setPortfolios(parsed.portfolios ?? []);
+        const restoredPortfolios = parsed.portfolios ?? [];
+        setPortfolios(restoredPortfolios);
         setLastSavedAt(parsed.savedAt ?? null);
         if (!localHistory.hourly.length && !localHistory.daily.length && parsed.history) {
           restoredHistory = normalizeHistoryCache(parsed.history);
         }
         setHistoryCache(restoredHistory);
+        syncReportCookie(restoredPortfolios);
         return;
       } catch {
         localStorage.removeItem(APP_CACHE_KEY);
@@ -575,7 +587,9 @@ export default function App() {
 
     const migratedMetal = metalPortfolioFromLegacy();
     setHistoryCache(restoredHistory);
-    setPortfolios(migratedMetal ? [migratedMetal] : []);
+    const restoredPortfolios = migratedMetal ? [migratedMetal] : [];
+    setPortfolios(restoredPortfolios);
+    syncReportCookie(restoredPortfolios);
   }, []);
 
   const persistPrivacy = useCallback((hidden: boolean, nextPattern = pattern) => {
@@ -742,6 +756,7 @@ export default function App() {
   function persist(next = portfolios, nextHistory = historyCache) {
     const savedAt = new Date().toISOString();
     localStorage.setItem(APP_CACHE_KEY, JSON.stringify({ portfolios: next, savedAt, history: nextHistory } satisfies AppCache));
+    syncReportCookie(next);
     setLastSavedAt(savedAt);
   }
 
