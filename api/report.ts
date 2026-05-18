@@ -31,6 +31,16 @@ type NormalizedPortfolio = {
   positions: NormalizedPosition[];
 };
 
+type ReportSection = {
+  label: string;
+  valueEUR: number;
+  investedEUR: number;
+  gainEUR: number;
+  profitability: number;
+  portfolios: number;
+  positions: number;
+};
+
 const KIND_LABELS: Record<PortfolioKind, string> = {
   indices: "Indices",
   crypto: "Crypto",
@@ -58,6 +68,25 @@ function gainFor(value: number, investedEUR: number) {
   const amount = value - investedEUR;
   const ratio = investedEUR > 0 ? value / investedEUR - 1 : 0;
   return { amount, ratio };
+}
+
+function reportSection(
+  label: string,
+  valueEUR: number,
+  investedEUR: number,
+  portfolios: number,
+  positions: number,
+): ReportSection {
+  const gain = gainFor(valueEUR, investedEUR);
+  return {
+    label,
+    valueEUR,
+    investedEUR,
+    gainEUR: gain.amount,
+    profitability: gain.ratio,
+    portfolios,
+    positions,
+  };
 }
 
 function quoteKey(kind: PortfolioKind, symbol: string) {
@@ -221,10 +250,12 @@ export default async function handler(request: any, response: any) {
       const rows = portfolioReports.filter((portfolio) => portfolio.kind === kind);
       const valueEUR = rows.reduce((sum, portfolio) => sum + portfolio.valueEUR, 0);
       const investedEUR = rows.reduce((sum, portfolio) => sum + portfolio.investedEUR, 0);
+      const positions = rows.reduce((sum, portfolio) => sum + portfolio.positions.length, 0);
       return {
         kind,
         label: KIND_LABELS[kind],
         count: rows.length,
+        positions,
         valueEUR,
         investedEUR,
         ...gainFor(valueEUR, investedEUR),
@@ -233,13 +264,40 @@ export default async function handler(request: any, response: any) {
 
     const valueEUR = portfolioReports.reduce((sum, portfolio) => sum + portfolio.valueEUR, 0);
     const investedEUR = portfolioReports.reduce((sum, portfolio) => sum + portfolio.investedEUR, 0);
+    const positions = portfolioReports.reduce((sum, portfolio) => sum + portfolio.positions.length, 0);
+    const sectionByKind = new Map(byKind.map((item) => [item.kind, item]));
+    const dashboard = {
+      valorGlobal: reportSection("Valor global", valueEUR, investedEUR, portfolioReports.length, positions),
+      indices: reportSection(
+        "Indices",
+        sectionByKind.get("indices")?.valueEUR ?? 0,
+        sectionByKind.get("indices")?.investedEUR ?? 0,
+        sectionByKind.get("indices")?.count ?? 0,
+        sectionByKind.get("indices")?.positions ?? 0,
+      ),
+      acciones: reportSection(
+        "Acciones",
+        sectionByKind.get("stocks")?.valueEUR ?? 0,
+        sectionByKind.get("stocks")?.investedEUR ?? 0,
+        sectionByKind.get("stocks")?.count ?? 0,
+        sectionByKind.get("stocks")?.positions ?? 0,
+      ),
+      crypto: reportSection(
+        "Crypto",
+        sectionByKind.get("crypto")?.valueEUR ?? 0,
+        sectionByKind.get("crypto")?.investedEUR ?? 0,
+        sectionByKind.get("crypto")?.count ?? 0,
+        sectionByKind.get("crypto")?.positions ?? 0,
+      ),
+    };
 
     response.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     response.status(200).json({
       refreshedAt: new Date().toISOString(),
+      dashboard,
       input: {
         portfolios: portfolios.length,
-        positions: portfolios.reduce((sum, portfolio) => sum + portfolio.positions.length, 0),
+        positions,
       },
       summary: {
         valueEUR,
