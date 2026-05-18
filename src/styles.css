@@ -38,6 +38,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .app-shell {
   width: min(1440px, calc(100% - 32px));
   margin: 0 auto;
@@ -768,6 +773,54 @@ td span {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 24px 90px rgba(17, 32, 28, 0.28);
+}
+
+.import-modal {
+  width: min(620px, 100%);
+  padding: 18px;
+  border: 1px solid rgba(217, 223, 219, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 90px rgba(17, 32, 28, 0.28);
+}
+
+.url-field {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 12px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.url-field input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--ink);
+  outline: none;
+}
+
+.url-field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.import-source-note {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .chart-summary {

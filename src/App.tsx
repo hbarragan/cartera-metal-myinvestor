@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   LayoutDashboard,
+  Link,
   LineChart,
   Plus,
   RefreshCcw,
@@ -70,6 +71,12 @@ type AppCache = {
   portfolios: Portfolio[];
   savedAt: string;
   history?: HistoryCache;
+  externalImport?: ExternalImportSource | null;
+};
+
+type ExternalImportSource = {
+  url: string;
+  importedAt: string;
 };
 
 type HistorySnapshot = {
@@ -557,6 +564,10 @@ export default function App() {
   const [pricesHidden, setPricesHidden] = useState(false);
   const [pattern, setPattern] = useState<string | null>(null);
   const [patternDialog, setPatternDialog] = useState<PatternDialog | null>(null);
+  const [externalImport, setExternalImport] = useState<ExternalImportSource | null>(null);
+  const [externalImportOpen, setExternalImportOpen] = useState(false);
+  const [externalImportUrl, setExternalImportUrl] = useState("");
+  const [externalImporting, setExternalImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const idleTimerRef = useRef<number | null>(null);
 
@@ -574,6 +585,8 @@ export default function App() {
         const restoredPortfolios = parsed.portfolios ?? [];
         setPortfolios(restoredPortfolios);
         setLastSavedAt(parsed.savedAt ?? null);
+        setExternalImport(parsed.externalImport ?? null);
+        setExternalImportUrl(parsed.externalImport?.url ?? "");
         if (!localHistory.hourly.length && !localHistory.daily.length && parsed.history) {
           restoredHistory = normalizeHistoryCache(parsed.history);
         }
@@ -753,9 +766,12 @@ export default function App() {
     [historyPositionQuery, totals.invested],
   );
 
-  function persist(next = portfolios, nextHistory = historyCache) {
+  function persist(next = portfolios, nextHistory = historyCache, nextExternalImport = externalImport) {
     const savedAt = new Date().toISOString();
-    localStorage.setItem(APP_CACHE_KEY, JSON.stringify({ portfolios: next, savedAt, history: nextHistory } satisfies AppCache));
+    localStorage.setItem(
+      APP_CACHE_KEY,
+      JSON.stringify({ portfolios: next, savedAt, history: nextHistory, externalImport: nextExternalImport } satisfies AppCache),
+    );
     syncReportCookie(next);
     setLastSavedAt(savedAt);
   }
@@ -768,7 +784,7 @@ export default function App() {
 
   function exportPortfolios() {
     const savedAt = new Date().toISOString();
-    const payload: AppCache = { portfolios, savedAt, history: historyCache };
+    const payload: AppCache = { portfolios, savedAt, history: historyCache, externalImport };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -794,24 +810,55 @@ export default function App() {
 
     try {
       const parsed = JSON.parse(await file.text()) as Partial<AppCache> | Portfolio[];
-      const rawPortfolios = Array.isArray(parsed) ? parsed : parsed.portfolios;
-      const importedHistory = Array.isArray(parsed) ? emptyHistory() : normalizeHistoryCache(parsed.history);
-      const imported = (rawPortfolios ?? [])
-        .map((portfolio) => normalizeImportedPortfolio(portfolio))
-        .filter(Boolean) as Portfolio[];
-
-      if (!imported.length) throw new Error("El archivo no contiene carteras validas");
-
-      setPortfolios(imported);
-      setHistoryCache(importedHistory);
-      setActiveView("dashboard");
-      persistHistory(importedHistory);
-      persist(imported, importedHistory);
+      applyImportedPayload(parsed);
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo importar el archivo");
     } finally {
       event.target.value = "";
+    }
+  }
+
+  function applyImportedPayload(parsed: Partial<AppCache> | Portfolio[], nextExternalImport: ExternalImportSource | null = externalImport) {
+    const rawPortfolios = Array.isArray(parsed) ? parsed : parsed.portfolios;
+    const importedHistory = Array.isArray(parsed) ? emptyHistory() : normalizeHistoryCache(parsed.history);
+    const imported = (rawPortfolios ?? [])
+      .map((portfolio) => normalizeImportedPortfolio(portfolio))
+      .filter(Boolean) as Portfolio[];
+
+    if (!imported.length) throw new Error("La importacion no contiene carteras validas");
+
+    setPortfolios(imported);
+    setHistoryCache(importedHistory);
+    setExternalImport(nextExternalImport);
+    setExternalImportUrl(nextExternalImport?.url ?? "");
+    setActiveView("dashboard");
+    persistHistory(importedHistory);
+    persist(imported, importedHistory, nextExternalImport);
+  }
+
+  async function importFromExternalUrl(url: string) {
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) {
+      setError("Pega una URL de descarga directa.");
+      return;
+    }
+
+    setExternalImporting(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/import?url=${encodeURIComponent(trimmedUrl)}&t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const parsed = (await response.json()) as Partial<AppCache> | Portfolio[];
+      const nextSource = { url: trimmedUrl, importedAt: new Date().toISOString() };
+      applyImportedPayload(parsed, nextSource);
+      setExternalImportOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo importar desde la URL");
+    } finally {
+      setExternalImporting(false);
     }
   }
 
@@ -937,6 +984,22 @@ export default function App() {
             <Upload size={17} />
             Importar
           </button>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              setExternalImportUrl(externalImport?.url ?? "");
+              setExternalImportOpen(true);
+            }}
+          >
+            <Link size={17} />
+            Importar URL
+          </button>
+          {externalImport ? (
+            <button className="secondary-button" disabled={externalImporting} onClick={() => void importFromExternalUrl(externalImport.url)}>
+              <RefreshCcw size={17} className={externalImporting ? "spin" : ""} />
+              Actualizar externo
+            </button>
+          ) : null}
           <input
             ref={importInputRef}
             className="hidden-file"
@@ -1093,6 +1156,17 @@ export default function App() {
           onClose={() => setPatternDialog(null)}
         />
       )}
+
+      {externalImportOpen ? (
+        <ExternalImportModal
+          importing={externalImporting}
+          lastSource={externalImport}
+          url={externalImportUrl}
+          onChangeUrl={setExternalImportUrl}
+          onClose={() => setExternalImportOpen(false)}
+          onImport={() => void importFromExternalUrl(externalImportUrl)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -1407,6 +1481,64 @@ function TrendChartModal({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ExternalImportModal({
+  importing,
+  lastSource,
+  url,
+  onChangeUrl,
+  onClose,
+  onImport,
+}: {
+  importing: boolean;
+  lastSource: ExternalImportSource | null;
+  url: string;
+  onChangeUrl: (url: string) => void;
+  onClose: () => void;
+  onImport: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="external-import-title">
+      <section className="import-modal">
+        <div className="pattern-modal-header">
+          <div>
+            <p className="eyebrow">Importacion externa</p>
+            <h2 id="external-import-title">Importar desde URL</h2>
+          </div>
+          <button className="icon-button small" onClick={onClose} title="Cerrar" type="button">
+            <X size={16} />
+          </button>
+        </div>
+
+        <label className="url-field">
+          URL de descarga directa
+          <input
+            autoFocus
+            onChange={(event) => onChangeUrl(event.target.value)}
+            placeholder="https://drive.google.com/uc?export=download&id=..."
+            value={url}
+          />
+        </label>
+
+        {lastSource ? (
+          <p className="import-source-note">
+            Origen guardado: {formatDateTime(lastSource.importedAt)}
+          </p>
+        ) : null}
+
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose} type="button">
+            Cancelar
+          </button>
+          <button className="primary-button" disabled={importing} onClick={onImport} type="button">
+            {importing ? <RefreshCcw size={17} className="spin" /> : <Upload size={17} />}
+            {importing ? "Importando" : "Importar"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
