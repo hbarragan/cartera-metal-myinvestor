@@ -10,7 +10,7 @@ import {
   yahooChart,
 } from "./lib/market.js";
 
-type MarketQuote = {
+export type MarketQuote = {
   id: string;
   kind: AssetKind;
   symbol: string;
@@ -120,7 +120,7 @@ async function quoteYahoo(kind: AssetKind, symbol: string): Promise<MarketQuote>
   };
 }
 
-async function quoteFor(kind: AssetKind, symbol: string): Promise<MarketQuote> {
+export async function quoteFor(kind: AssetKind, symbol: string): Promise<MarketQuote> {
   try {
     if (kind === "indices") {
       const fund = INDEX_FUNDS.find((item) => item.symbol === symbol);
